@@ -5,7 +5,7 @@ from steganogan.models import SteganoGAN
 from steganogan.critics import BasicCritic
 from steganogan.decoders import BasicDecoder, DenseDecoder
 from steganogan.encoders import BasicEncoder, ResidualEncoder, DenseEncoder
-from steganogan.loader import Data
+from steganogan.loader import DataLoader
 
 
 DATA_DEPTH = 1
@@ -18,7 +18,7 @@ validation = DataLoader("../research/data/div2k/val", shuffle=False)
 
 steganogan = SteganoGAN(DATA_DEPTH, DenseEncoder, DenseDecoder, BasicCritic, cuda=False, verbose=True, log_dir=LOG_DIR)
 # steganogan = SteganoGAN.load(architecture=None, path=MODEL_PATH, cuda=False, verbose=True)
-steganogan.fit(validation, validation, epochs=1, start_epoch=1)
+steganogan.fit(validation, validation, epochs=32, start_epoch=1)
 steganogan.save(MODEL_PATH)
 
 

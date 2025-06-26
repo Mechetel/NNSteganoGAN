@@ -10,7 +10,7 @@ _DEFAULT_SIGMA = [.5, .5, .5]
 
 DEFAULT_TRANSFORM = transforms.Compose([
     transforms.RandomHorizontalFlip(),
-    transforms.RandomCrop(30, pad_if_needed=True),
+    transforms.RandomCrop(360, pad_if_needed=True),
     transforms.ToTensor(),
     transforms.Normalize(_DEFAULT_MU, _DEFAULT_SIGMA),
 ])
