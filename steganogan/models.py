@@ -151,11 +151,11 @@ class SteganoGAN(object):
             generated_score = self._critic(generated)
 
             self.critic_optimizer.zero_grad()
-            (generated_score - cover_score).backward()
+            (cover_score - generated_score).backward()
             self.critic_optimizer.step()
 
             for p in self.critic.parameters():
-                p.data.clamp_(-0.01, 0.01)
+                p.data.clamp_(-0.1, 0.1)
 
             metrics['train.cover_score'].append(cover_score.item())
             metrics['train.generated_score'].append(generated_score.item())
@@ -167,7 +167,7 @@ class SteganoGAN(object):
             cover = cover.to(self.device)
             generated, payload, decoded = self._encode_decode(cover)
             encoder_mse, decoder_loss, decoder_acc = self._coding_scores(cover, generated, payload, decoded)
-            generated_score = - self._critic(generated)
+            generated_score = self._critic(generated)
 
             self.encoder_decoder_optimizer.zero_grad()
             (100.0 * encoder_mse + decoder_loss + generated_score).backward()
