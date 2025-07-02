@@ -37,10 +37,10 @@ class BasicCritic(nn.Module):
             self._conv2d(self.hidden_size, 1)
         )
 
-    def __init__(self, hidden_size):
+    def __init__(self):
         super().__init__()
         self.version = '1'
-        self.hidden_size = hidden_size
+        self.hidden_size = 32
         self._models = self._build_models()
 
     def upgrade_legacy(self):

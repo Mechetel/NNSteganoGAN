@@ -2,6 +2,7 @@ git clone https://github.com/Mechetel/NNSteganoGAN.git
 cd NNSteganoGAN/
 apt install python3-pip unzip
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip3 install imageio tqdm reedsolo
 
 cd research/data/
 mkdir div2k
@@ -15,5 +16,4 @@ mkdir train
 unzip -j DIV2K_train_HR.zip -d train/_
 rm DIV2K_train_HR.zip
 
-pip3 install imageio tqdm reedsolo
-cd ../../experiments/
+cd ../../../experiments/

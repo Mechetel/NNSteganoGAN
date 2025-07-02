@@ -41,11 +41,11 @@ class BasicEncoder(nn.Module):
         )
         return self.features, self.layers
 
-    def __init__(self, data_depth, hidden_size):
+    def __init__(self, data_depth):
         super().__init__()
         self.version = '1'
         self.data_depth = data_depth
-        self.hidden_size = hidden_size
+        self.hidden_size = 32
         self._models = self._build_models()
 
     def upgrade_legacy(self):
