@@ -3,7 +3,6 @@ import gc
 import inspect
 import json
 import os
-from collections import Counter
 
 import imageio
 from PIL import Image
@@ -13,7 +12,7 @@ from torch.nn.functional import binary_cross_entropy_with_logits, mse_loss
 from torch.optim import Adam
 from tqdm import tqdm
 
-from steganogan.utils import ssim, text_to_bits, bits_to_text
+from steganogan.utils import text_to_bits, bits_to_text, ssim
 
 METRIC_FIELDS = [
     'val.encoder_mse',
@@ -31,12 +30,8 @@ METRIC_FIELDS = [
     'train.generated_score',
 ]
 
-
 class SteganoGAN(object):
-
     def _get_instance(self, class_or_instance, kwargs):
-        """Returns an instance of the class"""
-
         if not inspect.isclass(class_or_instance):
             return class_or_instance
 
@@ -46,8 +41,8 @@ class SteganoGAN(object):
 
         return class_or_instance(**init_args)
 
+
     def set_device(self, cuda=True):
-        """Sets the torch device depending on whether cuda is avaiable or not."""
         if cuda and torch.cuda.is_available():
             self.cuda = True
             self.device = torch.device('cuda')
@@ -80,7 +75,6 @@ class SteganoGAN(object):
         self.critic_optimizer = None
         self.encoder_decoder_optimizer = None
 
-        # Misc
         self.fit_metrics = None
         self.history = list()
 
@@ -96,29 +90,10 @@ class SteganoGAN(object):
 
 
     def _random_data(self, cover):
-        """Generate random data ready to be hidden inside the cover image.
-
-        Args:
-            cover (image): Image to use as cover.
-
-        Returns:
-            generated (image): Image generated with the encoded message.
-        """
         N, _, H, W = cover.size()
         return torch.zeros((N, self.data_depth, H, W), device=self.device).random_(0, 2)
 
     def _encode_decode(self, cover, quantize=False):
-        """Encode random data and then decode it.
-
-        Args:
-            cover (image): Image to use as cover.
-            quantize (bool): whether to quantize the generated image or not.
-
-        Returns:
-            generated (image): Image generated with the encoded message.
-            payload (bytes): Random data that has been encoded in the image.
-            decoded (bytes): Data decoded from the generated image.
-        """
         payload = self._random_data(cover)
         generated = self.encoder(cover, payload)
         if quantize:
@@ -130,7 +105,6 @@ class SteganoGAN(object):
         return generated, payload, decoded
 
     def _critic(self, image):
-        """Evaluate the image using the critic"""
         return torch.mean(self.critic(image))
 
     def _get_optimizers(self):
@@ -141,7 +115,6 @@ class SteganoGAN(object):
         return critic_optimizer, encoder_decoder_optimizer
 
     def _fit_critic(self, train, metrics):
-        """Critic process"""
         for cover, _ in tqdm(train, disable=not self.verbose):
             gc.collect()
             cover = cover.to(self.device)
@@ -161,7 +134,6 @@ class SteganoGAN(object):
             metrics['train.generated_score'].append(generated_score.item())
 
     def _fit_coders(self, train, metrics):
-        """Fit the encoder and the decoder on the train images."""
         for cover, _ in tqdm(train, disable=not self.verbose):
             gc.collect()
             cover = cover.to(self.device)
@@ -185,7 +157,6 @@ class SteganoGAN(object):
         return encoder_mse, decoder_loss, decoder_acc
 
     def _validate(self, validate, metrics):
-        """Validation process"""
         for cover, _ in tqdm(validate, disable=not self.verbose):
             gc.collect()
             cover = cover.to(self.device)
@@ -204,54 +175,46 @@ class SteganoGAN(object):
             metrics['val.rsbpp'].append(self.data_depth * (2 * decoder_acc.item() - 1))
 
     def _generate_samples(self, epoch, text_to_encode=""):
-        """
-        Generate samples with optional encoding step.
-        
-        Args:
-            epoch: Current epoch number
-            text_to_encode: Text message to encode into images (empty string for no encoding)
-        """
         image_filenames = sorted(os.listdir(self.callback_images_path))
         if len(image_filenames) < 8:
             raise ValueError("Expected at least 8 generated images in callback_images")
-        
+
         reshaped_tensors = []
         original_images = []
-        
+
         for filename in image_filenames[:8]:
             path = os.path.join(self.callback_images_path, filename)
-            
+
             # Load and convert to tensor (-1.0..1.0)
             image = imread(path, pilmode='RGB') / 127.5 - 1.0
             tensor = torch.FloatTensor(image).permute(2, 0, 1)
-            
+
             # Apply encoding if text is provided
             if text_to_encode:
                 # Prepare image for encoding (add batch dimension)
                 cover = tensor.unsqueeze(0).to(self.device)
                 cover_size = cover.size()
-                
-                # Create payload for encoding
+
                 payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text_to_encode)
                 payload = payload.to(self.device)
-                
+
                 # Encode the image
                 encoded_tensor = self.encoder(cover, payload)[0].clamp(-1.0, 1.0)
                 # Remove batch dimension and move to CPU
                 tensor = encoded_tensor.squeeze(0).cpu()
-            
+
             # Save original image (without resize)
             original_tensor = tensor.clamp(-1.0, 1.0)
             original_tensor = ((original_tensor + 1.0) / 2.0 * 255.0).byte()
             original_image = Image.fromarray(original_tensor.permute(1, 2, 0).numpy())
             original_images.append((filename, original_image))
-            
+
             # Scale for grid
             resized_tensor = torch.nn.functional.interpolate(
                 tensor.unsqueeze(0), size=(360, 360), mode='bilinear', align_corners=False
             ).squeeze(0)
             reshaped_tensors.append(resized_tensor)
-        
+
         # Save original images
         epoch_dir = os.path.join(self.epoch_images_path, f'epoch{epoch}')
         os.makedirs(epoch_dir, exist_ok=True)
@@ -263,12 +226,12 @@ class SteganoGAN(object):
                 filename = f"encoded_{base_name}{ext}"
             output_path = os.path.join(epoch_dir, filename)
             img.save(output_path)
-        
+
         # Create grid
         batch = torch.stack(reshaped_tensors).clamp(-1.0, 1.0)
         batch = ((batch + 1.0) / 2.0 * 255.0).byte()
         images = [Image.fromarray(t.permute(1, 2, 0).numpy()) for t in batch]
-        
+
         grid_cols = 4
         grid_rows = 2
         gap = 20
@@ -276,36 +239,32 @@ class SteganoGAN(object):
         total_w = grid_cols * img_w + (grid_cols - 1) * gap
         total_h = grid_rows * img_h + (grid_rows - 1) * gap
         grid_img = Image.new('RGB', (total_w, total_h), color=(255, 255, 255))
-        
+
         for idx, img in enumerate(images):
             row = idx // grid_cols
             col = idx % grid_cols
             x = col * (img_w + gap)
             y = row * (img_h + gap)
             grid_img.paste(img, (x, y))
-        
+
         # Save grid
         grid_filename = f'grid_epoch_{epoch}.png'
         if text_to_encode:
             grid_filename = f'encoded_grid_epoch_{epoch}.png'
-        
+
         grid_output_path = os.path.join(self.grid_epoch_images_path, grid_filename)
         grid_img.save(grid_output_path)
-        
+
         if self.verbose:
             encoding_status = "with encoding" if text_to_encode else "without encoding"
             print(f'Original images saved to {self.epoch_images_path} ({encoding_status})')
             print(f'Grid image saved to {grid_output_path}')
-            if text_to_encode:
-                print(f'Encoded message: "{text_to_encode}"')
 
 
     def fit(self, train, validate, epochs=40, start_epoch=1):
-        """Train a new model with the given ImageLoader class."""
-
         if self.critic_optimizer is None:
             self.critic_optimizer, self.encoder_decoder_optimizer = self._get_optimizers()
-            
+
             # Load existing history if metrics.log exists
             metrics_path = os.path.join(self.log_dir, 'metrics.log')
             if os.path.exists(metrics_path):
@@ -354,10 +313,6 @@ class SteganoGAN(object):
             gc.collect()
 
     def _make_payload(self, width, height, depth, text):
-        """
-        This takes a piece of text and encodes it into a bit vector. It then
-        fills a matrix of size (width, height) with copies of the bit vector.
-        """
         message = text_to_bits(text) + [0] * 32
         payload = message
         while len(payload) < width * height * depth:
@@ -368,17 +323,10 @@ class SteganoGAN(object):
         return torch.FloatTensor(payload).view(1, depth, height, width)
 
     def encode(self, cover, output, text):
-        """Encode an image.
-        Args:
-            cover (str): Path to the image to be used as cover.
-            output (str): Path where the generated image will be saved.
-            text (str): Message to hide inside the image.
-        """
         cover = imread(cover, pilmode='RGB') / 127.5 - 1.0
         cover = torch.FloatTensor(cover).permute(2, 1, 0).unsqueeze(0)
 
         cover_size = cover.size()
-        # _, _, height, width = cover.size()
         payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text)
 
         cover = cover.to(self.device)
@@ -392,11 +340,9 @@ class SteganoGAN(object):
             print('Encoding completed.')
 
     def decode(self, image):
-
         if not os.path.exists(image):
             raise ValueError('Unable to read %s.' % image)
 
-        # extract a bit vector
         image = imread(image, pilmode='RGB') / 255.0
         image = torch.FloatTensor(image).permute(2, 1, 0).unsqueeze(0)
         image = image.to(self.device)
@@ -409,20 +355,10 @@ class SteganoGAN(object):
         return text
 
     def save(self, path):
-        """Save the fitted model in the given path. Raises an exception if there is no model."""
         torch.save(self, path)
 
     @classmethod
     def load(cls, architecture=None, path=None, cuda=True, verbose=False):
-        """Loads an instance of SteganoGAN for the given architecture (default pretrained models)
-        or loads a pretrained model from a given path.
-
-        Args:
-            architecture(str): Name of a pretrained model to be loaded from the default models.
-            path(str): Path to custom pretrained model. *Architecture must be None.
-            cuda(bool): Force loaded model to use cuda (if available).
-            verbose(bool): Force loaded model to use or not verbose.
-        """
         if cuda and torch.cuda.is_available():
             device = torch.device('cuda')
         else:
