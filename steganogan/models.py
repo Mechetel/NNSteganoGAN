@@ -13,7 +13,7 @@ from torch.nn.functional import binary_cross_entropy_with_logits, mse_loss
 from torch.optim import Adam
 from tqdm import tqdm
 
-from steganogan.utils import bits_to_bytearray, bytearray_to_text, ssim, text_to_bits
+from steganogan.utils import ssim, text_to_bits, bits_to_text
 
 METRIC_FIELDS = [
     'val.encoder_mse',
@@ -404,19 +404,9 @@ class SteganoGAN(object):
         image = self.decoder(image).view(-1) > 0
 
         # split and decode messages
-        candidates = Counter()
         bits = image.data.int().cpu().numpy().tolist()
-        for candidate in bits_to_bytearray(bits).split(b'\x00\x00\x00\x00'):
-            candidate = bytearray_to_text(bytearray(candidate))
-            if candidate:
-                candidates[candidate] += 1
-
-        # choose most common message
-        if len(candidates) == 0:
-            raise ValueError('Failed to find message.')
-
-        candidate, count = candidates.most_common(1)[0]
-        return candidate
+        text = bits_to_text(bits)
+        return text
 
     def save(self, path):
         """Save the fitted model in the given path. Raises an exception if there is no model."""
@@ -433,6 +423,10 @@ class SteganoGAN(object):
             cuda(bool): Force loaded model to use cuda (if available).
             verbose(bool): Force loaded model to use or not verbose.
         """
+        if cuda and torch.cuda.is_available():
+            device = torch.device('cuda')
+        else:
+            device = torch.device('cpu')
 
         if architecture and not path:
             model_name = '{}.steg'.format(architecture)
@@ -443,7 +437,7 @@ class SteganoGAN(object):
             raise ValueError(
                 'Please provide either an architecture or a path to pretrained model.')
 
-        steganogan = torch.load(path, map_location='cpu')
+        steganogan = torch.load(path, map_location=device, weights_only=False)
         steganogan.verbose = verbose
 
         steganogan.set_device(cuda)

@@ -10,7 +10,7 @@ from steganogan.loader import DataLoader
 
 DATA_DEPTH = 1
 LOG_DIR = 'logs'
-MODEL_PATH = f'models/dense_{DATA_DEPTH}'
+MODEL_PATH = f'models/dense_{DATA_DEPTH}.steg'
 
 
 train = DataLoader("../research/data/div2k/train", shuffle=True)

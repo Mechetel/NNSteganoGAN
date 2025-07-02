@@ -1,0 +1,170 @@
+    1  git
+    2  ls
+    3  ls -la
+    4  git clone git@github.com:Mechetel/NNSteganoGAN.git
+    5  ls
+    6  git clone git@github.com:Mechetel/NNSteganoGAN.git
+    7  git clone https://github.com/Mechetel/NNSteganoGAN.git
+    8  ls
+    9  cd NNSteganoGAN/
+   10  ls
+   11  python
+   12  python3
+   13  nvcc --version 
+   14  pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+   15  which pip
+   16  which pip3
+   17  which -a pip3
+   18  which -a pip
+   19  apt install python3-pip
+   20  which -a pip
+   21  which -a pip3
+   22  pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+   23  python3
+   24  ls
+   25  cd research/
+   26  ls
+   27  cd data/
+   28  ls
+   29  cat download.sh 
+   30  mkdir div2k
+   31  cd div2k
+   32  ls
+   33  wget http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_valid_HR.zip
+   34  mkdir val
+   35  unzip -j DIV2K_valid_HR.zip -d val/_
+   36  apt install unzip
+   37  unzip -j DIV2K_valid_HR.zip -d val/_
+   38  cat download.sh 
+   39  cat ../download.sh 
+   40  ls
+   41  rm DIV2K_valid_HR.zip
+   42  ls
+   43  wget http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_train_HR.zip
+   44  mkdir train
+   45  unzip -j DIV2K_train_HR.zip -d train/_
+   46  cat ../download.sh 
+   47  rm DIV2K_train_HR.zip
+   48  ls
+   49  cd ../../..
+   50  ls
+   51  cd experiments/
+   52  ls
+   53  vim dense_fit.
+   54  vim dense_fit.py
+   55  python3 dense_fit.py 
+   56  pip3 install imageio
+   57  python3 dense_fit.py 
+   58  pip3 install tqdm
+   59  python3 dense_fit.py 
+   60  pip3 install reedsolo
+   61  python3 dense_fit.py 
+   62  ls
+   63  cd ..
+   64  ls
+   65  cd research/
+   66  ls
+   67  cd ..
+   68  ls
+   69  cd experiments/
+   70  ls
+   71  cd logs/
+   72  ls
+   73  cd ..
+   74  ls
+   75  mkdir models
+   76  ls
+   77  cd logs/
+   78  ls
+   79  pwd 32.rsbpp-0.854154.p
+   80  cd ..
+   81  ls
+   82  vim dense_fit.py 
+   83  ls
+   84  vim dense_fit.py 
+   85  ls
+   86  cd logs/
+   87  ls
+   88  exit
+   89  cat NNSteganoGAN/experiments/logs/metrics.log 
+   90  which python3
+   91  python3 -v
+   92  cat NNSteganoGAN/experiments/logs/metrics.log 
+   93  python3
+   94  cat NNSteganoGAN/experiments/logs/metrics.log 
+   95  ls
+   96  cat NNSteganoGAN/experiments/logs/metrics.log exit
+   97  exit
+   98  cd NNSteganoGAN/
+   99  ls
+  100  cd experiments/
+  101  ls
+  102  cd logs/
+  103  ls
+  104  cat metrics.log 
+  105  pwd
+  106  cat metrics.log 
+  107  cd
+  108  ls
+  109  rm -rf NNSteganoGAN/
+  110  ls
+  111  git clone https://github.com/Mechetel/NNSteganoGAN.git
+  112  cd NNSteganoGAN/
+  113  ls
+  114  cd research/data/
+  115  ls
+  116  cat download.sh 
+  117  mkdir div2k
+  118  cd div2k
+  119  wget http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_valid_HR.zip
+  120  mkdir val
+  121  unzip -j DIV2K_valid_HR.zip -d val/_
+  122  cat ../download.sh 
+  123  rm DIV2K_valid_HR.zip
+  124  wget http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_train_HR.zip
+  125  mkdir train
+  126  unzip -j DIV2K_train_HR.zip -d train/_
+  127  rm DIV2K_train_HR.zip 
+  128  cd ../../..
+  129  ls
+  130  cd experiments/
+  131  ls 
+  132  python3 dense_fit.py 
+  133  ls
+  134  vim dense_fit.py 
+  135  python3 dense_fit.py 
+  136  ls
+  137  vim dense_fit.py
+  138  ls
+  139  python3 dense_fit.py 
+  140  ls
+  141  cd models/
+  142  ls
+  143  ls -la
+  144  mv dense_1 dense_1.steg
+  145  ls
+  146  cd ..
+  147  ls
+  148  vim dense_fit.py
+  149  python3 dense_fit.py 
+  150  vim ../steganogan/models.py 
+  151  vim dense_fit.py
+  152  python3 dense_fit.py 
+  153  ls
+  154  vim dense_fit.py
+  155  vim ../steganogan/models.py 
+  156  vim dense_fit.py
+  157  python3 dense_fit.py 
+  158  vim ../steganogan/models.py 
+  159  python3 dense_fit.py 
+  160  vim dense_fit.py
+  161  python3 dense_fit.py 
+  162  vim dense_fit.py
+  163  vim ../steganogan/models.py 
+  164  python3 dense_fit.py 
+  165  ls
+  166  cd models/
+  167  ls
+  168  exit
+  169  history
+  170  history > hist.log

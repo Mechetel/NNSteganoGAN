@@ -4,6 +4,7 @@ from math import exp
 import torch
 from reedsolo import RSCodec
 from torch.nn.functional import conv2d
+from collections import Counter
 
 
 rs = RSCodec(250)
@@ -14,8 +15,21 @@ def text_to_bits(text):
 
 
 def bits_to_text(bits):
-    """Convert a list of ints in {0, 1} to text"""
-    return bytearray_to_text(bits_to_bytearray(bits))
+  """Convert a list of ints in {0, 1} to text"""
+  candidates = Counter()
+  for candidate in bits_to_bytearray(bits).split(b'\x00\x00\x00\x00'):
+    candidate = bytearray_to_text(bytearray(candidate))
+    if candidate:
+      candidates[candidate] += 1
+
+  # choose most common message
+  if len(candidates) == 0:
+    raise ValueError('Failed to find message.')
+
+  candidate, count = candidates.most_common(1)[0]
+  print(f'Found {count} candidates for message. Choosing most common!')
+
+  return candidate
 
 
 def bytearray_to_bits(x):
@@ -48,13 +62,19 @@ def text_to_bytearray(text):
 
 
 def bytearray_to_text(x):
-    """Apply error correction and decompress"""
-    try:
-        text = rs.decode(x)
-        text = zlib.decompress(text)
-        return text.decode("utf-8")
-    except BaseException:
-        return False
+  """Apply error correction and decompress"""
+  try:
+    assert isinstance(x, (bytes, bytearray)), "expected bytes or bytearray"
+
+    decoded = rs.decode(x)
+    
+    if isinstance(decoded, tuple):
+      decoded = decoded[0]
+
+    decompressed = zlib.decompress(bytes(decoded))
+    return decompressed.decode("utf-8")
+  except BaseException:
+    return False
 
 
 def first_element(storage, loc):
