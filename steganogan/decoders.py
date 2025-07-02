@@ -1,93 +1,113 @@
 # -*- coding: utf-8 -*-
+
 import torch
 from torch import nn
-import torch.nn.functional as F
+
 
 class BasicDecoder(nn.Module):
     """
-    The BasicDecoder module takes a steganographic image and attempts to decode
+    The BasicDecoder module takes an steganographic image and attempts to decode
     the embedded data tensor.
+
     Input: (N, 3, H, W)
     Output: (N, D, H, W)
     """
-    def __init__(self, data_depth):
+
+    def _conv2d(self, in_channels, out_channels):
+        return nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=3,
+            padding=1
+        )
+
+    def _build_models(self):
+        self.layers = nn.Sequential(
+            self._conv2d(3, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm2d(self.hidden_size),
+
+            self._conv2d(self.hidden_size, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm2d(self.hidden_size),
+
+            self._conv2d(self.hidden_size, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm2d(self.hidden_size),
+
+            self._conv2d(self.hidden_size, self.data_depth)
+        )
+
+        return [self.layers]
+
+    def __init__(self, data_depth, hidden_size):
         super().__init__()
+        self.version = '1'
         self.data_depth = data_depth
-        
-        # Define individual layers
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(32)
-        self.conv4 = nn.Conv2d(32, self.data_depth, kernel_size=3, padding=1)
+        self.hidden_size = hidden_size
+
+        self._models = self._build_models()
+
+    def upgrade_legacy(self):
+        """Transform legacy pretrained models to make them usable with new code versions."""
+        # Transform to version 1
+        if not hasattr(self, 'version'):
+            self._models = [self.layers]
+
+            self.version = '1'
 
     def forward(self, x):
-        """Forward pass through the decoder network."""
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.leaky_relu(x, inplace=True)
-        
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.leaky_relu(x, inplace=True)
-        
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = F.leaky_relu(x, inplace=True)
-        
-        x = self.conv4(x)
+        x = self._models[0](x)
+
+        if len(self._models) > 1:
+            x_list = [x]
+            for layer in self._models[1:]:
+                x = layer(torch.cat(x_list, dim=1))
+                x_list.append(x)
+
         return x
 
 
-class DenseDecoder(nn.Module):
+class DenseDecoder(BasicDecoder):
     """
-    The DenseDecoder module takes a steganographic image and attempts to decode
-    the embedded data tensor with dense connections.
+    The DenseDecoder module takes an steganographic image and attempts to decode
+    the embedded data tensor.
+
     Input: (N, 3, H, W)
     Output: (N, D, H, W)
     """
-    def __init__(self, data_depth):
-        super().__init__()
-        self.data_depth = data_depth
-        
-        # Define layers with proper input channels for dense connections
-        # conv1: input channels = 3
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        
-        # conv2: input channels = 32 (from conv1)
-        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(32)
-        
-        # conv3: input channels = 64 (conv1 + conv2 concatenated: 32 + 32)
-        self.conv3 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(32)
-        
-        # conv4: input channels = 96 (conv1 + conv2 + conv3 concatenated: 32 + 32 + 32)
-        self.conv4 = nn.Conv2d(96, self.data_depth, kernel_size=3, padding=1)
+    def _build_models(self):
+        self.conv1 = nn.Sequential(
+            self._conv2d(3, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm2d(self.hidden_size)
+        )
 
-    def forward(self, x):
-        """Forward pass with dense connections - concatenating all previous outputs."""
-        # First layer
-        x1 = self.conv1(x)
-        x1 = self.bn1(x1)
-        x1 = F.leaky_relu(x1, inplace=True)
-        
-        # Second layer - input is just x1
-        x2 = self.conv2(x1)
-        x2 = self.bn2(x2)
-        x2 = F.leaky_relu(x2, inplace=True)
-        
-        # Third layer - input is concatenation of x1 and x2
-        x3_input = torch.cat([x1, x2], dim=1)  # Concatenate along channel dimension
-        x3 = self.conv3(x3_input)
-        x3 = self.bn3(x3)
-        x3 = F.leaky_relu(x3, inplace=True)
-        
-        # Fourth layer - input is concatenation of x1, x2, and x3
-        x4_input = torch.cat([x1, x2, x3], dim=1)  # Concatenate all previous outputs
-        x4 = self.conv4(x4_input)
-        
-        return x4
+        self.conv2 = nn.Sequential(
+            self._conv2d(self.hidden_size, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm2d(self.hidden_size)
+        )
+
+        self.conv3 = nn.Sequential(
+            self._conv2d(self.hidden_size * 2, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm2d(self.hidden_size)
+        )
+
+        self.conv4 = nn.Sequential(self._conv2d(self.hidden_size * 3, self.data_depth))
+
+        return self.conv1, self.conv2, self.conv3, self.conv4
+
+    def upgrade_legacy(self):
+        """Transform legacy pretrained models to make them usable with new code versions."""
+        # Transform to version 1
+        if not hasattr(self, 'version'):
+            self._models = [
+                self.conv1,
+                self.conv2,
+                self.conv3,
+                self.conv4
+            ]
+
+            self.version = '1'

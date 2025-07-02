@@ -376,5 +376,9 @@ class SteganoGAN(object):
         steganogan = torch.load(path, map_location=device, weights_only=False)
         steganogan.verbose = verbose
 
+        steganogan.encoder.upgrade_legacy()
+        steganogan.decoder.upgrade_legacy()
+        steganogan.critic.upgrade_legacy()
+
         steganogan.set_device(cuda)
         return steganogan
