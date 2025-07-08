@@ -1,13 +1,14 @@
+# -*- coding: utf-8 -*-
+
 import zlib
 from math import exp
 
 import torch
 from reedsolo import RSCodec
 from torch.nn.functional import conv2d
-from collections import Counter
-
 
 rs = RSCodec(250)
+
 
 def text_to_bits(text):
     """Convert text to a list of ints in {0, 1}"""
@@ -15,21 +16,8 @@ def text_to_bits(text):
 
 
 def bits_to_text(bits):
-  """Convert a list of ints in {0, 1} to text"""
-  candidates = Counter()
-  for candidate in bits_to_bytearray(bits).split(b'\x00\x00\x00\x00'):
-    candidate = bytearray_to_text(bytearray(candidate))
-    if candidate:
-      candidates[candidate] += 1
-
-  # choose most common message
-  if len(candidates) == 0:
-    raise ValueError('Failed to find message.')
-
-  candidate, count = candidates.most_common(1)[0]
-  print(f'Found {count} candidates for message. Choosing most common!')
-
-  return candidate
+    """Convert a list of ints in {0, 1} to text"""
+    return bytearray_to_text(bits_to_bytearray(bits))
 
 
 def bytearray_to_bits(x):
@@ -51,6 +39,7 @@ def bits_to_bytearray(bits):
         ints.append(int(''.join([str(bit) for bit in byte]), 2))
 
     return bytearray(ints)
+
 
 def text_to_bytearray(text):
     """Compress and add error correction"""

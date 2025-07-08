@@ -10,7 +10,7 @@ _DEFAULT_SIGMA = [.5, .5, .5]
 
 DEFAULT_TRANSFORM = transforms.Compose([
     transforms.RandomHorizontalFlip(),
-    transforms.RandomCrop(360, pad_if_needed=True),
+    transforms.RandomCrop(30, pad_if_needed=True),
     transforms.ToTensor(),
     transforms.Normalize(_DEFAULT_MU, _DEFAULT_SIGMA),
 ])
@@ -27,6 +27,7 @@ class ImageFolder(torchvision.datasets.ImageFolder):
 
 
 class DataLoader(torch.utils.data.DataLoader):
+
     def __init__(self, path, transform=None, limit=np.inf, shuffle=True,
                  num_workers=8, batch_size=4, *args, **kwargs):
 

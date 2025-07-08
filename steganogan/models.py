@@ -3,16 +3,22 @@ import gc
 import inspect
 import json
 import os
+from collections import Counter
 
 import imageio
 from PIL import Image
+
 import torch
 from imageio import imread, imwrite
 from torch.nn.functional import binary_cross_entropy_with_logits, mse_loss
 from torch.optim import Adam
 from tqdm import tqdm
 
-from steganogan.utils import text_to_bits, bits_to_text, ssim
+from steganogan.utils import bits_to_bytearray, bytearray_to_text, ssim, text_to_bits
+
+DEFAULT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    'train')
 
 METRIC_FIELDS = [
     'val.encoder_mse',
@@ -29,6 +35,7 @@ METRIC_FIELDS = [
     'train.cover_score',
     'train.generated_score',
 ]
+
 
 class SteganoGAN(object):
     def _get_instance(self, class_or_instance, kwargs):
@@ -62,36 +69,37 @@ class SteganoGAN(object):
         self.decoder.to(self.device)
         self.critic.to(self.device)
 
+
     def __init__(self, data_depth, encoder, decoder, critic, cuda=False, verbose=False, log_dir=None, **kwargs):
         self.verbose = verbose
+
         self.data_depth = data_depth
         kwargs['data_depth'] = data_depth
 
         self.encoder = self._get_instance(encoder, kwargs)
         self.decoder = self._get_instance(decoder, kwargs)
         self.critic = self._get_instance(critic, kwargs)
+
         self.set_device(cuda)
 
         self.critic_optimizer = None
         self.encoder_decoder_optimizer = None
 
+        # Misc
         self.fit_metrics = None
         self.history = list()
 
         self.log_dir = log_dir
         if log_dir:
             os.makedirs(self.log_dir, exist_ok=True)
-            self.callback_images_path = os.path.join(self.log_dir, 'callback_images')
-            self.epoch_images_path = os.path.join(self.log_dir, 'epoch_images')
-            self.grid_epoch_images_path = os.path.join(self.log_dir, 'grid_epoch_images')
-            os.makedirs(self.callback_images_path, exist_ok=True)
-            os.makedirs(self.epoch_images_path, exist_ok=True)
-            os.makedirs(self.grid_epoch_images_path, exist_ok=True)
+            self.samples_path = os.path.join(self.log_dir, 'samples')
+            os.makedirs(self.samples_path, exist_ok=True)
 
 
     def _random_data(self, cover):
         N, _, H, W = cover.size()
         return torch.zeros((N, self.data_depth, H, W), device=self.device).random_(0, 2)
+
 
     def _encode_decode(self, cover, quantize=False):
         payload = self._random_data(cover)
@@ -104,15 +112,18 @@ class SteganoGAN(object):
 
         return generated, payload, decoded
 
+
     def _critic(self, image):
         return torch.mean(self.critic(image))
 
+
     def _get_optimizers(self):
-        _dec_list = list(self.decoder.parameters()) + list(self.encoder.parameters())
+        _enc_dec_list = list(self.decoder.parameters()) + list(self.encoder.parameters())
         critic_optimizer = Adam(self.critic.parameters(), lr=1e-4)
-        encoder_decoder_optimizer = Adam(_dec_list, lr=1e-4)
+        encoder_decoder_optimizer = Adam(_enc_dec_list, lr=1e-4)
 
         return critic_optimizer, encoder_decoder_optimizer
+
 
     def _fit_critic(self, train, metrics):
         for cover, _ in tqdm(train, disable=not self.verbose):
@@ -124,7 +135,7 @@ class SteganoGAN(object):
             generated_score = self._critic(generated)
 
             self.critic_optimizer.zero_grad()
-            (cover_score - generated_score).backward()
+            (cover_score - generated_score).backward(retain_graph=False)
             self.critic_optimizer.step()
 
             for p in self.critic.parameters():
@@ -132,6 +143,7 @@ class SteganoGAN(object):
 
             metrics['train.cover_score'].append(cover_score.item())
             metrics['train.generated_score'].append(generated_score.item())
+
 
     def _fit_coders(self, train, metrics):
         for cover, _ in tqdm(train, disable=not self.verbose):
@@ -149,12 +161,14 @@ class SteganoGAN(object):
             metrics['train.decoder_loss'].append(decoder_loss.item())
             metrics['train.decoder_acc'].append(decoder_acc.item())
 
+
     def _coding_scores(self, cover, generated, payload, decoded):
         encoder_mse = mse_loss(generated, cover)
         decoder_loss = binary_cross_entropy_with_logits(decoded, payload)
         decoder_acc = (decoded >= 0.0).eq(payload >= 0.5).sum().float() / payload.numel()
 
         return encoder_mse, decoder_loss, decoder_acc
+
 
     def _validate(self, validate, metrics):
         for cover, _ in tqdm(validate, disable=not self.verbose):
@@ -174,8 +188,10 @@ class SteganoGAN(object):
             metrics['val.psnr'].append(10 * torch.log10(4 / encoder_mse).item())
             metrics['val.rsbpp'].append(self.data_depth * (2 * decoder_acc.item() - 1))
 
-    def _generate_samples(self, epoch, text_to_encode=""):
-        image_filenames = sorted(os.listdir(self.callback_images_path))
+
+    def _generate_samples(self, samples_path, epoch, text_to_encode):
+        callback_images_path = os.path.join('data', 'callback_images')
+        image_filenames = sorted(os.listdir(callback_images_path))
         if len(image_filenames) < 8:
             raise ValueError("Expected at least 8 generated images in callback_images")
 
@@ -183,7 +199,7 @@ class SteganoGAN(object):
         original_images = []
 
         for filename in image_filenames[:8]:
-            path = os.path.join(self.callback_images_path, filename)
+            path = os.path.join(callback_images_path, filename)
 
             # Load and convert to tensor (-1.0..1.0)
             image = imread(path, pilmode='RGB') / 127.5 - 1.0
@@ -216,16 +232,13 @@ class SteganoGAN(object):
             reshaped_tensors.append(resized_tensor)
 
         # Save original images
-        epoch_dir = os.path.join(self.epoch_images_path, f'epoch{epoch}')
-        os.makedirs(epoch_dir, exist_ok=True)
-        
-        for filename, img in original_images:
-            # Add prefix to indicate if encoded
-            if text_to_encode:
-                base_name, ext = os.path.splitext(filename)
-                filename = f"encoded_{base_name}{ext}"
-            output_path = os.path.join(epoch_dir, filename)
-            img.save(output_path)
+        # epoch_dir = os.path.join(samples_path, f'epoch{epoch}')
+        # os.makedirs(epoch_dir, exist_ok=True)
+        # for filename, img in original_images:
+        #     base_name, ext = os.path.splitext(filename)
+        #     filename = f"{base_name}{ext}"
+        #     output_path = os.path.join(epoch_dir, filename)
+        #     img.save(output_path)
 
         # Create grid
         batch = torch.stack(reshaped_tensors).clamp(-1.0, 1.0)
@@ -249,34 +262,30 @@ class SteganoGAN(object):
 
         # Save grid
         grid_filename = f'grid_epoch_{epoch}.png'
-        if text_to_encode:
-            grid_filename = f'encoded_grid_epoch_{epoch}.png'
 
-        grid_output_path = os.path.join(self.grid_epoch_images_path, grid_filename)
+        grid_output_path = os.path.join(samples_path, grid_filename)
         grid_img.save(grid_output_path)
 
-        if self.verbose:
-            encoding_status = "with encoding" if text_to_encode else "without encoding"
-            print(f'Original images saved to {self.epoch_images_path} ({encoding_status})')
-            print(f'Grid image saved to {grid_output_path}')
 
+    def fit(self, train, validate, epochs=32, start_epoch=1, data_depth=None):
+        if self.data_depth is None:
+            self.data_depth = data_depth
 
-    def fit(self, train, validate, epochs=40, start_epoch=1):
         if self.critic_optimizer is None:
             self.critic_optimizer, self.encoder_decoder_optimizer = self._get_optimizers()
 
-            # Load existing history if metrics.log exists
-            metrics_path = os.path.join(self.log_dir, 'metrics.log')
-            if os.path.exists(metrics_path):
-                try:
-                    with open(metrics_path, 'r') as metrics_file:
-                        self.history = json.load(metrics_file)
-                        print(self.history)
-                except (json.JSONDecodeError, IOError) as e:
-                    print(f"Warning: Could not load existing metrics.log: {e}")
-                    self.history = []
-            else:
+        # Load existing history if metrics.log exists
+        metrics_path = os.path.join(self.log_dir, 'metrics.log')
+        if os.path.exists(metrics_path):
+            try:
+                with open(metrics_path, 'r') as metrics_file:
+                    self.history = json.load(metrics_file)
+                    print(self.history)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Warning: Could not load existing metrics.log: {e}")
                 self.history = []
+        else:
+            self.history = []
 
         # Start training
         end_epoch = start_epoch + epochs
@@ -285,7 +294,7 @@ class SteganoGAN(object):
             metrics = {field: list() for field in METRIC_FIELDS}
 
             if self.verbose:
-                print('Epoch {}/{}'.format(epoch, end_epoch - 1 ))
+                print('Epoch {}/{}'.format(epoch, end_epoch - 1))
 
             self._fit_critic(train, metrics)
             self._fit_coders(train, metrics)
@@ -301,19 +310,21 @@ class SteganoGAN(object):
                 with open(metrics_path, 'w') as metrics_file:
                     json.dump(self.history, metrics_file, indent=4)
 
-                save_name = '{}.rsbpp-{:03f}.p'.format(epoch, self.fit_metrics['val.rsbpp'])
+                save_name = '{}.rsbpp-{:03f}.p'.format(
+                    self.epochs, self.fit_metrics['val.rsbpp'])
 
                 self.save(os.path.join(self.log_dir, save_name))
-                self._generate_samples(epoch, text_to_encode="Hello, SteganoGAN!")
+                self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!")
 
-            # Empty cuda cache (this may help for memory leaks)
             if self.cuda:
                 torch.cuda.empty_cache()
 
             gc.collect()
 
+
     def _make_payload(self, width, height, depth, text):
         message = text_to_bits(text) + [0] * 32
+
         payload = message
         while len(payload) < width * height * depth:
             payload += message
@@ -322,11 +333,13 @@ class SteganoGAN(object):
 
         return torch.FloatTensor(payload).view(1, depth, height, width)
 
+
     def encode(self, cover, output, text):
         cover = imread(cover, pilmode='RGB') / 127.5 - 1.0
         cover = torch.FloatTensor(cover).permute(2, 1, 0).unsqueeze(0)
 
         cover_size = cover.size()
+        # _, _, height, width = cover.size()
         payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text)
 
         cover = cover.to(self.device)
@@ -339,10 +352,12 @@ class SteganoGAN(object):
         if self.verbose:
             print('Encoding completed.')
 
+
     def decode(self, image):
         if not os.path.exists(image):
             raise ValueError('Unable to read %s.' % image)
 
+        # extract a bit vector
         image = imread(image, pilmode='RGB') / 255.0
         image = torch.FloatTensor(image).permute(2, 1, 0).unsqueeze(0)
         image = image.to(self.device)
@@ -350,31 +365,49 @@ class SteganoGAN(object):
         image = self.decoder(image).view(-1) > 0
 
         # split and decode messages
+        candidates = Counter()
         bits = image.data.int().cpu().numpy().tolist()
-        text = bits_to_text(bits)
-        return text
+        for candidate in bits_to_bytearray(bits).split(b'\x00\x00\x00\x00'):
+            candidate = bytearray_to_text(bytearray(candidate))
+            if candidate:
+                candidates[candidate] += 1
+
+        # choose most common message
+        if len(candidates) == 0:
+            raise ValueError('Failed to find message.')
+
+        candidate, count = candidates.most_common(1)[0]
+        return candidate
 
     def save(self, path):
         torch.save(self, path)
 
+
     @classmethod
-    def load(cls, architecture=None, path=None, cuda=True, verbose=False):
+    def load(cls, path, cuda=True, verbose=False, log_dir=None):
+        if (path is None):
+            raise ValueError(
+                'Please provide a path to pretrained model.')
+        
         if cuda and torch.cuda.is_available():
             device = torch.device('cuda')
         else:
             device = torch.device('cpu')
 
-        if architecture and not path:
-            model_name = '{}.steg'.format(architecture)
-            pretrained_path = os.path.join(os.path.dirname(__file__), 'pretrained')
-            path = os.path.join(pretrained_path, model_name)
-
-        elif (architecture is None and path is None) or (architecture and path):
-            raise ValueError(
-                'Please provide either an architecture or a path to pretrained model.')
-
         steganogan = torch.load(path, map_location=device, weights_only=False)
         steganogan.verbose = verbose
+
+        steganogan.critic_optimizer = None
+        steganogan.encoder_decoder_optimizer = None
+
+        steganogan.fit_metrics = None
+        steganogan.history = list()
+
+        steganogan.log_dir = log_dir
+        if log_dir:
+            os.makedirs(steganogan.log_dir, exist_ok=True)
+            steganogan.samples_path = os.path.join(steganogan.log_dir, 'samples')
+            os.makedirs(steganogan.samples_path, exist_ok=True)
 
         steganogan.encoder.upgrade_legacy()
         steganogan.decoder.upgrade_legacy()

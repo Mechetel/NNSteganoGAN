@@ -52,6 +52,6 @@ class BasicCritic(nn.Module):
 
     def forward(self, x):
         x = self._models(x)
-        x = torch.mean(x.view(x.size(0), -1), dim=1) 
+        x = torch.mean(x.view(x.size(0), -1), dim=1)
 
         return x
