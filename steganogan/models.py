@@ -310,8 +310,7 @@ class SteganoGAN(object):
                 with open(metrics_path, 'w') as metrics_file:
                     json.dump(self.history, metrics_file, indent=4)
 
-                save_name = '{}.rsbpp-{:03f}.p'.format(
-                    self.epochs, self.fit_metrics['val.rsbpp'])
+                save_name = '{}.rsbpp-{:03f}.p'.format(epoch, self.fit_metrics['val.rsbpp'])
 
                 self.save(os.path.join(self.log_dir, save_name))
                 self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!")
@@ -388,7 +387,7 @@ class SteganoGAN(object):
         if (path is None):
             raise ValueError(
                 'Please provide a path to pretrained model.')
-        
+
         if cuda and torch.cuda.is_available():
             device = torch.device('cuda')
         else:
