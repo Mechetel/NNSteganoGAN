@@ -4,3 +4,4 @@
 /research/data/mscoco.zip
 
 .DS_Store
+__pycache__

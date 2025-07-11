@@ -7,15 +7,16 @@ from time import time
 
 import torch
 
-from steganogan_nc.models import SteganoGAN
-from steganogan_nc.decoders import BasicDecoder, DenseDecoder
-from steganogan_nc.encoders import BasicEncoder, ResidualEncoder, DenseEncoder
-from steganogan_nc.loader import DataLoader
+from steganogan_wgan.models import SteganoGAN
+from steganogan_wgan.critics import BasicCritic
+from steganogan_wgan.decoders import BasicDecoder, DenseDecoder
+from steganogan_wgan.encoders import BasicEncoder, ResidualEncoder, DenseEncoder
+from steganogan_wgan.loader import DataLoader
 
 
 def main():
     torch.manual_seed(42)
-    training_type = 'no_critic'
+    training_type = 'wgan'
     timestamp = str(int(time()))
 
     train = DataLoader(os.path.join("data", "div2k", "train"), shuffle=True)

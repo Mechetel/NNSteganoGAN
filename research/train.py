@@ -16,11 +16,11 @@ from steganogan.loader import DataLoader
 
 def main():
     torch.manual_seed(42)
+    training_type = 'original'
     timestamp = str(int(time()))
 
     train = DataLoader(os.path.join("data", "div2k", "train"), shuffle=True)
     validation = DataLoader(os.path.join("data", "div2k", "val"), shuffle=False)
-
 
     steganogan = SteganoGAN(
         data_depth=1,
@@ -29,9 +29,9 @@ def main():
         critic=BasicCritic,
         cuda=True,
         verbose=True,
-        log_dir=os.path.join('models', timestamp)
+        log_dir=os.path.join('models', training_type, timestamp)
     )
-    with open(os.path.join("models", timestamp, "config.json"), "wt") as fout:
+    with open(os.path.join("models", training_type, timestamp, "config.json"), "wt") as fout:
         fout.write(json.dumps({
             "epochs": 32,
             "encoder": "dense",
@@ -40,7 +40,7 @@ def main():
         }, indent=2, default=lambda o: str(o)))
 
     steganogan.fit(train, validation, epochs=32)
-    steganogan.save(os.path.join("models", timestamp, "weights.steg"))
+    steganogan.save(os.path.join("models", training_type, timestamp, "weights.steg"))
 
 if __name__ == '__main__':
     main()

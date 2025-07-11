@@ -135,7 +135,7 @@ class SteganoGAN(object):
             generated_score = self._critic(generated)
 
             self.critic_optimizer.zero_grad()
-            (generated_score - cover_score).backward()
+            (cover_score - generated_score).backward()
             self.critic_optimizer.step()
 
             for p in self.critic.parameters():
@@ -151,7 +151,7 @@ class SteganoGAN(object):
             cover = cover.to(self.device)
             generated, payload, decoded = self._encode_decode(cover)
             encoder_mse, decoder_loss, decoder_acc = self._coding_scores(cover, generated, payload, decoded)
-            generated_score = - self._critic(generated)
+            generated_score = self._critic(generated)
 
             self.encoder_decoder_optimizer.zero_grad()
             (100.0 * encoder_mse + decoder_loss + generated_score).backward()
@@ -310,10 +310,11 @@ class SteganoGAN(object):
                 with open(metrics_path, 'w') as metrics_file:
                     json.dump(self.history, metrics_file, indent=4)
 
-                save_name = '{}.rsbpp-{:03f}.p'.format(epoch, self.fit_metrics['val.rsbpp'])
-
-                self.save(os.path.join(self.log_dir, save_name))
-                self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!")
+                # first epoch, every 5 epochs, and last epoch
+                if epoch == start_epoch or epoch % 5 == 0 or epoch == end_epoch - 1:
+                    save_name = '{}.rsbpp-{:03f}.p'.format(epoch, self.fit_metrics['val.rsbpp'])
+                    self.save(os.path.join(self.log_dir, save_name))
+                    self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!")
 
             if self.cuda:
                 torch.cuda.empty_cache()

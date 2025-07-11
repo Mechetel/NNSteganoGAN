@@ -24,12 +24,16 @@ METRIC_FIELDS = [
     'val.encoder_mse',
     'val.decoder_loss',
     'val.decoder_acc',
+    'val.cover_score',
+    'val.generated_score',
     'val.ssim',
     'val.psnr',
     'val.rsbpp',
     'train.encoder_mse',
     'train.decoder_loss',
     'train.decoder_acc',
+    'train.cover_score',
+    'train.generated_score',
 ]
 
 
@@ -63,9 +67,10 @@ class SteganoGAN(object):
 
         self.encoder.to(self.device)
         self.decoder.to(self.device)
+        self.critic.to(self.device)
 
 
-    def __init__(self, data_depth, encoder, decoder, cuda=False, verbose=False, log_dir=None, **kwargs):
+    def __init__(self, data_depth, encoder, decoder, critic, cuda=False, verbose=False, log_dir=None, **kwargs):
         self.verbose = verbose
 
         self.data_depth = data_depth
@@ -73,9 +78,11 @@ class SteganoGAN(object):
 
         self.encoder = self._get_instance(encoder, kwargs)
         self.decoder = self._get_instance(decoder, kwargs)
+        self.critic = self._get_instance(critic, kwargs)
 
         self.set_device(cuda)
 
+        self.critic_optimizer = None
         self.encoder_decoder_optimizer = None
 
         # Misc
@@ -106,11 +113,38 @@ class SteganoGAN(object):
         return generated, payload, decoded
 
 
+    def _critic(self, image):
+        return torch.mean(self.critic(image))
+
+
     def _get_optimizers(self):
         _enc_dec_list = list(self.decoder.parameters()) + list(self.encoder.parameters())
+        critic_optimizer = Adam(self.critic.parameters(), lr=1e-4)
         encoder_decoder_optimizer = Adam(_enc_dec_list, lr=1e-4)
 
-        return encoder_decoder_optimizer
+        return critic_optimizer, encoder_decoder_optimizer
+
+
+    def _fit_critic(self, train, metrics):
+        for cover, _ in tqdm(train, disable=not self.verbose):
+            gc.collect()
+            cover = cover.to(self.device)
+
+            for _ in range(5):  # n_critic = 5
+                payload = self._random_data(cover)
+                generated = self.encoder(cover, payload)
+                cover_score = self._critic(cover)
+                generated_score = self._critic(generated)
+
+                self.critic_optimizer.zero_grad()
+                (generated_score - cover_score).backward()
+                self.critic_optimizer.step()
+
+                for p in self.critic.parameters():
+                    p.data.clamp_(-0.01, 0.01)
+
+            metrics['train.cover_score'].append(cover_score.item())
+            metrics['train.generated_score'].append(generated_score.item())
 
 
     def _fit_coders(self, train, metrics):
@@ -119,9 +153,10 @@ class SteganoGAN(object):
             cover = cover.to(self.device)
             generated, payload, decoded = self._encode_decode(cover)
             encoder_mse, decoder_loss, decoder_acc = self._coding_scores(cover, generated, payload, decoded)
+            generated_score = - self._critic(generated)
 
             self.encoder_decoder_optimizer.zero_grad()
-            (100.0 * encoder_mse + decoder_loss).backward()
+            (100.0 * encoder_mse + decoder_loss + generated_score).backward()
             self.encoder_decoder_optimizer.step()
 
             metrics['train.encoder_mse'].append(encoder_mse.item())
@@ -143,10 +178,14 @@ class SteganoGAN(object):
             cover = cover.to(self.device)
             generated, payload, decoded = self._encode_decode(cover, quantize=True)
             encoder_mse, decoder_loss, decoder_acc = self._coding_scores(cover, generated, payload, decoded)
+            generated_score = self._critic(generated)
+            cover_score = self._critic(cover)
 
             metrics['val.encoder_mse'].append(encoder_mse.item())
             metrics['val.decoder_loss'].append(decoder_loss.item())
             metrics['val.decoder_acc'].append(decoder_acc.item())
+            metrics['val.cover_score'].append(cover_score.item())
+            metrics['val.generated_score'].append(generated_score.item())
             metrics['val.ssim'].append(ssim(cover, generated).item())
             metrics['val.psnr'].append(10 * torch.log10(4 / encoder_mse).item())
             metrics['val.rsbpp'].append(self.data_depth * (2 * decoder_acc.item() - 1))
@@ -234,8 +273,8 @@ class SteganoGAN(object):
         if self.data_depth is None:
             self.data_depth = data_depth
 
-        if self.encoder_decoder_optimizer is None:
-            self.encoder_decoder_optimizer = self._get_optimizers()
+        if self.critic_optimizer is None:
+            self.critic_optimizer, self.encoder_decoder_optimizer = self._get_optimizers()
 
         # Load existing history if metrics.log exists
         metrics_path = os.path.join(self.log_dir, 'metrics.log')
@@ -259,6 +298,7 @@ class SteganoGAN(object):
             if self.verbose:
                 print('Epoch {}/{}'.format(epoch, end_epoch - 1))
 
+            self._fit_critic(train, metrics)
             self._fit_coders(train, metrics)
             self._validate(validate, metrics)
 
@@ -359,6 +399,7 @@ class SteganoGAN(object):
         steganogan = torch.load(path, map_location=device, weights_only=False)
         steganogan.verbose = verbose
 
+        steganogan.critic_optimizer = None
         steganogan.encoder_decoder_optimizer = None
 
         steganogan.fit_metrics = None
@@ -372,6 +413,7 @@ class SteganoGAN(object):
 
         steganogan.encoder.upgrade_legacy()
         steganogan.decoder.upgrade_legacy()
+        steganogan.critic.upgrade_legacy()
 
         steganogan.set_device(cuda)
         return steganogan
