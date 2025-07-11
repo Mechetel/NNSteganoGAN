@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
+import sys, os
+sys.path.append('..')
+
 import json
-import os
 from time import time
 
 import torch
 
-from steganogan import SteganoGAN
+from steganogan.models import SteganoGAN
 from steganogan.critics import BasicCritic
 from steganogan.decoders import BasicDecoder, DenseDecoder
 from steganogan.encoders import BasicEncoder, ResidualEncoder, DenseEncoder
