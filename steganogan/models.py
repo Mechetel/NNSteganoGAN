@@ -135,7 +135,7 @@ class SteganoGAN(object):
             generated_score = self._critic(generated)
 
             self.critic_optimizer.zero_grad()
-            (cover_score - generated_score).backward(retain_graph=False)
+            (generated_score - cover_score).backward()
             self.critic_optimizer.step()
 
             for p in self.critic.parameters():
@@ -151,7 +151,7 @@ class SteganoGAN(object):
             cover = cover.to(self.device)
             generated, payload, decoded = self._encode_decode(cover)
             encoder_mse, decoder_loss, decoder_acc = self._coding_scores(cover, generated, payload, decoded)
-            generated_score = self._critic(generated)
+            generated_score = - self._critic(generated)
 
             self.encoder_decoder_optimizer.zero_grad()
             (100.0 * encoder_mse + decoder_loss + generated_score).backward()

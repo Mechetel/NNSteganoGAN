@@ -1,0 +1,10 @@
+{
+  "epochs": 32,
+  "encoder": "dense",
+  "data_depth": 1,
+  "dataset": "div2k"
+}
+
+// by wgan model
+// (generated_score - cover_score).backward()
+//generated_score = - self._critic(generated)
