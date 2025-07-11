@@ -8,7 +8,6 @@ from time import time
 import torch
 
 from steganogan_nc.models import SteganoGAN
-from steganogan_nc.critics import BasicCritic
 from steganogan_nc.decoders import BasicDecoder, DenseDecoder
 from steganogan_nc.encoders import BasicEncoder, ResidualEncoder, DenseEncoder
 from steganogan_nc.loader import DataLoader

@@ -234,8 +234,8 @@ class SteganoGAN(object):
         if self.data_depth is None:
             self.data_depth = data_depth
 
-        if self.critic_optimizer is None:
-            self.critic_optimizer, self.encoder_decoder_optimizer = self._get_optimizers()
+        if self.encoder_decoder_optimizer is None:
+            self.encoder_decoder_optimizer = self._get_optimizers()
 
         # Load existing history if metrics.log exists
         metrics_path = os.path.join(self.log_dir, 'metrics.log')
@@ -259,7 +259,6 @@ class SteganoGAN(object):
             if self.verbose:
                 print('Epoch {}/{}'.format(epoch, end_epoch - 1))
 
-            self._fit_critic(train, metrics)
             self._fit_coders(train, metrics)
             self._validate(validate, metrics)
 

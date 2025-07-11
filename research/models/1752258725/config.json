@@ -1,9 +1,0 @@
-{
-  "epochs": 32,
-  "encoder": "dense",
-  "data_depth": 1,
-  "dataset": "div2k"
-}
-
-// original steganogan algorithm
-// with some modifications to save grid epoch samples
