@@ -5,8 +5,10 @@ import torch
 import torchvision
 from torchvision import transforms
 
+
 _DEFAULT_MU = [.5, .5, .5]
 _DEFAULT_SIGMA = [.5, .5, .5]
+
 
 DEFAULT_TRANSFORM = transforms.Compose([
     transforms.RandomHorizontalFlip(),
@@ -27,10 +29,7 @@ class ImageFolder(torchvision.datasets.ImageFolder):
 
 
 class DataLoader(torch.utils.data.DataLoader):
-
-    def __init__(self, path, transform=None, limit=np.inf, shuffle=True,
-                 num_workers=8, batch_size=4, *args, **kwargs):
-
+    def __init__(self, path, transform=None, limit=np.inf, shuffle=True, num_workers=8, batch_size=4, *args, **kwargs):
         if transform is None:
             transform = DEFAULT_TRANSFORM
 
