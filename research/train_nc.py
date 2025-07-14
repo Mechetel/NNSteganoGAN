@@ -25,7 +25,6 @@ def main():
         data_depth=1,
         encoder=DenseEncoder,
         decoder=DenseDecoder,
-        critic=BasicCritic,
         cuda=True,
         verbose=True,
         log_dir=os.path.join('models', training_type, timestamp)
