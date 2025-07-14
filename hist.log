@@ -15,3 +15,16 @@ wget http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_train_HR.zip
 mkdir train
 unzip -j DIV2K_train_HR.zip -d train/_
 rm DIV2K_train_HR.zip
+
+
+
+=================
+time to train one epoch on digital ocean GPU droplet
+NVIDIA RTX4000 ADA / 1 GPU - 20 GB VRAM - 8 vCPU - 32 GB RAM / Boot disk: 500 GB NVMe
+
+orinal 0.57
+no_critic 0.27
+wgan 1.57
+wgan_gp 4.27
+
+=================
