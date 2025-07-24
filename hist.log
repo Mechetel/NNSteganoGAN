@@ -24,6 +24,7 @@ NVIDIA RTX4000 ADA / 1 GPU - 20 GB VRAM - 8 vCPU - 32 GB RAM / Boot disk: 500 GB
 
 orinal 0.57
 no_critic 0.27
+no_critic_custom_dense 0.20
 wgan 1.57
 wgan_gp 4.27
 
