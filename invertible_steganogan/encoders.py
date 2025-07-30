@@ -1,38 +1,65 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from .model_utils import CouplingBlock, PyramidAttention
+from .model_utils import ResidualBlock, PyramidAttention
 
 
-class InvertibleStegaEncoder(nn.Module):
+class SteganoEncoder(nn.Module):
     """
-    Простая одномасштабная инвертируемая модель без изменения разрешения
+    PANet-based Steganography Encoder
+    Embeds secret data into cover images
     """
-    def __init__(self, data_depth):
-        super().__init__()
-        self.data_depth = data_depth
-        self.base_channels = 64
-        self.n_blocks = 4
-        
-        ch = self.base_channels
-        # начальная свёртка: cover(3) + data(data_depth) -> ch каналов
-        self.initial = nn.Sequential(
-            nn.Conv2d(3 + self.data_depth, ch, 3, padding=1),
-            nn.ReLU(inplace=True)
+    def __init__(self, secret_channels=3, cover_channels=3):
+        self.hidden_channels = 64
+        super(SteganoEncoder, self).__init__()
+
+        # Initial feature extraction
+        self.initial_conv = nn.Conv2d(secret_channels + 3, hidden_channels, 3, padding=1)
+
+        # Encoder blocks with pyramid attention
+        self.encoder_blocks = nn.Sequential(
+            ResidualBlock(hidden_channels, hidden_channels),
+            ResidualBlock(hidden_channels, hidden_channels * 2),
+            ResidualBlock(hidden_channels * 2, hidden_channels * 2),
+            ResidualBlock(hidden_channels * 2, hidden_channels * 4),
+            ResidualBlock(hidden_channels * 4, hidden_channels * 4),
         )
-        # повторяющиеся блоки attention + coupling
-        blocks = []
-        for _ in range(self.n_blocks):
-            blocks.append(PyramidAttention(ch))
-            blocks.append(CouplingBlock(ch))
-        self.blocks = nn.Sequential(*blocks)
-        # финальный свёрточный слой: ch -> RGB
-        self.final = nn.Conv2d(ch, 3, 3, padding=1)
 
-    def forward(self, cover, data):
-        # data: тензор размера (N, data_depth, H, W)
-        x = torch.cat([cover, data], dim=1)
-        x = self.initial(x)
-        x = self.blocks(x)
-        stego = torch.tanh(self.final(x))  # (N,3,H,W)
+        # Middle pyramid attention block
+        self.middle_attention = PyramidAttention(hidden_channels * 4)
+
+        # Decoder blocks
+        self.decoder_blocks = nn.Sequential(
+            ResidualBlock(hidden_channels * 4, hidden_channels * 4),
+            ResidualBlock(hidden_channels * 4, hidden_channels * 2),
+            ResidualBlock(hidden_channels * 2, hidden_channels * 2),
+            ResidualBlock(hidden_channels * 2, hidden_channels),
+            ResidualBlock(hidden_channels, hidden_channels),
+        )
+
+        # Final output layer
+        self.final_conv = nn.Sequential(
+            nn.Conv2d(hidden_channels, 3, 3, padding=1),
+            nn.Tanh()  # Normalize output to [-1, 1]
+        )
+
+    def forward(self, secret, cover):
+        # Concatenate secret and cover images
+        x = torch.cat([secret, cover], dim=1)
+
+        # Initial feature extraction
+        x = F.relu(self.initial_conv(x))
+
+        # Encode with pyramid attention
+        x = self.encoder_blocks(x)
+
+        # Middle attention refinement
+        x = self.middle_attention(x)
+
+        # Decode to stego image
+        x = self.decoder_blocks(x)
+
+        # Final stego image
+        stego = self.final_conv(x)
+
         return stego

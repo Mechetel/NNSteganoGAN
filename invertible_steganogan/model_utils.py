@@ -1,40 +1,89 @@
 import torch
 from torch import nn
 
-class CouplingBlock(nn.Module):
-    def __init__(self, channels):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(channels//2, channels, 3, padding=1),
+class PyramidAttention(nn.Module):
+    """
+    Pyramid Attention Module inspired by PANet
+    Captures long-range feature correspondences from multi-scale feature pyramid
+    """
+    def __init__(self, in_channels, reduction=16):
+        super(PyramidAttention, self).__init__()
+        self.in_channels = in_channels
+        self.reduction = reduction
+
+        # Channel attention
+        self.channel_attention = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, in_channels // reduction, 1, bias=False),
             nn.ReLU(inplace=True),
-            nn.Conv2d(channels, channels//2 * 2, 3, padding=1)  # outputs scale & shift
+            nn.Conv2d(in_channels // reduction, in_channels, 1, bias=False),
+            nn.Sigmoid()
         )
 
-    def forward(self, x, reverse=False):
-        x1, x2 = x.chunk(2, dim=1)
-        h = self.net(x1)
-        s, t = h.chunk(2, dim=1)
-        s = torch.tanh(s)
-        if not reverse:
-            y2 = x2 * torch.exp(s) + t
-            return torch.cat([x1, y2], dim=1)
-        else:
-            y2 = (x2 - t) * torch.exp(-s)
-            return torch.cat([x1, y2], dim=1)
+        # Spatial attention
+        self.spatial_attention = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.Sigmoid()
+        )
 
-class PyramidAttention(nn.Module):
-    def __init__(self, channels):
-        super().__init__()
-        self.q = nn.Conv2d(channels, channels//8, 1)
-        self.k = nn.Conv2d(channels, channels//8, 1)
-        self.v = nn.Conv2d(channels, channels, 1)
+        # Multi-scale feature extraction
+        self.pyramid_conv1 = nn.Conv2d(in_channels, in_channels, 1, bias=False)
+        self.pyramid_conv3 = nn.Conv2d(in_channels, in_channels, 3, padding=1, bias=False)
+        self.pyramid_conv5 = nn.Conv2d(in_channels, in_channels, 5, padding=2, bias=False)
+
+        # Feature fusion
+        self.fusion_conv = nn.Conv2d(in_channels * 3, in_channels, 1, bias=False)
 
     def forward(self, x):
-        b, c, h, w = x.shape
-        q = self.q(x).view(b, -1, h*w)           # b x c' x N
-        k = self.k(x).view(b, -1, h*w)           # b x c' x N
-        v = self.v(x).view(b, c,   h*w)          # b x c  x N
+        # Multi-scale feature extraction
+        feat1 = self.pyramid_conv1(x)
+        feat3 = self.pyramid_conv3(x)
+        feat5 = self.pyramid_conv5(x)
 
-        attn = torch.softmax(q.transpose(1,2) @ k / (c**0.5), dim=-1)  # b x N x N
-        out = (v @ attn).view(b, c, h, w)
-        return out + x  # residual
+        # Feature concatenation
+        multi_scale_feat = torch.cat([feat1, feat3, feat5], dim=1)
+        fused_feat = self.fusion_conv(multi_scale_feat)
+
+        # Channel attention
+        channel_att = self.channel_attention(fused_feat)
+        channel_refined = fused_feat * channel_att
+
+        # Spatial attention
+        avg_out = torch.mean(channel_refined, dim=1, keepdim=True)
+        max_out, _ = torch.max(channel_refined, dim=1, keepdim=True)
+        spatial_input = torch.cat([avg_out, max_out], dim=1)
+        spatial_att = self.spatial_attention(spatial_input)
+
+        # Final attention-refined features
+        output = channel_refined * spatial_att
+
+        return output + x  # Residual connection
+
+class ResidualBlock(nn.Module):
+    """Residual block with pyramid attention"""
+    def __init__(self, in_channels, out_channels):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.pyramid_attention = PyramidAttention(out_channels)
+
+        self.shortcut = nn.Sequential()
+        if in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, 1, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        residual = self.shortcut(x)
+
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out = self.pyramid_attention(out)
+
+        out += residual
+        out = F.relu(out)
+
+        return out
