@@ -13,7 +13,6 @@ from imageio import imread, imwrite
 from torch.nn.functional import binary_cross_entropy_with_logits, mse_loss
 from torch.optim import Adam
 from tqdm import tqdm
-import torch.autograd as autograd
 
 from steganogan.utils import bits_to_bytearray, bytearray_to_text, ssim, text_to_bits
 
@@ -123,34 +122,34 @@ class SteganoGAN(object):
         return torch.mean(self.critic(image))
 
 
-    def _compute_gradient_penalty(self, real_samples, fake_samples):
+    def gradient_penalty(self, real_samples, fake_samples):
         """Compute gradient penalty for WGAN-GP"""
         batch_size = real_samples.size(0)
 
         # Random weight term for interpolation between real and fake samples
-        alpha = torch.rand(batch_size, 1, 1, 1, device=self.device)
+        alpha = torch.rand(batch_size, 1, 1, 1).to(self.device)
 
         # Get random interpolation between real and fake samples
-        interpolated = alpha * real_samples + (1 - alpha) * fake_samples
-        interpolated = interpolated.requires_grad_(True)
-
+        interpolated = (alpha * real_samples + (1 - alpha) * fake_samples).to(self.device)
+        interpolated.requires_grad_(True)  # CRITICAL: Enable gradients for interpolated samples
+        
         # Calculate critic output for interpolated examples
         critic_interpolated = self.critic(interpolated)
-
+        
         # Calculate gradients of critic output with respect to interpolated examples
-        gradients = autograd.grad(
+        gradients = torch.autograd.grad(
             outputs=critic_interpolated,
             inputs=interpolated,
-            grad_outputs=torch.ones_like(critic_interpolated),
+            grad_outputs=torch.ones_like(critic_interpolated, device=self.device),
             create_graph=True,
             retain_graph=True,
             only_inputs=True
         )[0]
-
+        
         # Flatten gradients to calculate norm
-        gradients = gradients.view(batch_size, -1)
+        gradients = gradients.view(gradients.size(0), -1)
 
-        # Calculate L2 norm of gradients
+        # Calculate the L2 norm of the gradients
         gradient_norm = gradients.norm(2, dim=1)
 
         # Calculate gradient penalty: (||∇||₂ - 1)²
@@ -159,43 +158,44 @@ class SteganoGAN(object):
         return gradient_penalty
 
 
+
     def _get_optimizers(self):
         _enc_dec_list = list(self.decoder.parameters()) + list(self.encoder.parameters())
-        # WGAN-GP typically uses Adam with β1=0, β2=0.9 and lr=1e-4
-        critic_optimizer = Adam(self.critic.parameters(), lr=1e-4, betas=(0.0, 0.9))
-        encoder_decoder_optimizer = Adam(_enc_dec_list, lr=1e-4, betas=(0.0, 0.9))
+        critic_optimizer = Adam(self.critic.parameters(), lr=1e-4)
+        encoder_decoder_optimizer = Adam(_enc_dec_list, lr=1e-4)
 
         return critic_optimizer, encoder_decoder_optimizer
 
 
-    def _fit_critic(self, train, metrics):
+    def fit_critic(self, train, metrics):
         for cover, _ in tqdm(train, disable=not self.verbose):
             gc.collect()
             cover = cover.to(self.device)
-
+            
             # Train critic multiple times per generator step (typical for WGAN-GP)
             for _ in range(5):  # n_critic = 5
                 payload = self._random_data(cover)
                 generated = self.encoder(cover, payload)
-
                 # Detach generated samples for critic training
                 generated = generated.detach()
-
+                
+                # Reset gradients
+                self.critic_optimizer.zero_grad()
+                
                 cover_score = self._critic(cover)
                 generated_score = self._critic(generated)
-
+                
                 # Compute gradient penalty
-                gradient_penalty = self._compute_gradient_penalty(cover, generated)
-
+                gradient_penalty = self.gradient_penalty(cover, generated)
+                
                 # WGAN-GP loss: maximize D(real) - D(fake) - λ * GP
                 # Which means minimize: D(fake) - D(real) + λ * GP
                 critic_loss = generated_score - cover_score + self.lambda_gp * gradient_penalty
-
-                self.critic_optimizer.zero_grad()
+                
                 critic_loss.backward()
                 self.critic_optimizer.step()
-
-            # Store metrics only once per batch
+            
+            # Store metrics only once per batch (use the last iteration's values)
             metrics['train.cover_score'].append(cover_score.item())
             metrics['train.generated_score'].append(generated_score.item())
             metrics['train.gradient_penalty'].append(gradient_penalty.item())
