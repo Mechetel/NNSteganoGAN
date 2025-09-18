@@ -120,7 +120,12 @@ class DenseDecoder(nn.Module):
             nn.Conv2d(32, self.data_depth, kernel_size=3, padding=1),
             nn.Sigmoid()  # Smooth gating weights [0,1]
         )
-    
+
+    def upgrade_legacy(self):
+        """Transform legacy pretrained models to make them usable with new code versions."""
+        if not hasattr(self, 'version'):
+            self.version = '1'
+
     def forward(self, x, p):
         # Base decoding
         x1 = self.conv1(x)
