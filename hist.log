@@ -26,6 +26,7 @@ orinal 0.57
 no_critic 0.27
 no_critic_custom_dense 0.20
 wgan 1.57
-wgan_gp 4.27
+wgan_gp_1 4.27
+wgan_gp_2 2.35 (on 8 dollar droplet)
 
 =================

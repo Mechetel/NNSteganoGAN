@@ -14,7 +14,7 @@ from torch.nn.functional import binary_cross_entropy_with_logits, mse_loss
 from torch.optim import Adam
 from tqdm import tqdm
 
-from steganogan.utils import bits_to_bytearray, bytearray_to_text, ssim, text_to_bits
+from steganogan_nc_aes.utils import bits_to_bytearray, bytearray_to_text, ssim, text_to_bits, most_common_candidate_from
 
 DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -24,18 +24,12 @@ METRIC_FIELDS = [
     'val.encoder_mse',
     'val.decoder_loss',
     'val.decoder_acc',
-    'val.cover_score',
-    'val.generated_score',
     'val.ssim',
     'val.psnr',
     'val.rsbpp',
-    'val.gradient_penalty',
     'train.encoder_mse',
     'train.decoder_loss',
     'train.decoder_acc',
-    'train.cover_score',
-    'train.generated_score',
-    'train.gradient_penalty',
 ]
 
 
@@ -69,25 +63,21 @@ class SteganoGAN(object):
 
         self.encoder.to(self.device)
         self.decoder.to(self.device)
-        self.critic.to(self.device)
 
 
-    def __init__(self, data_depth, encoder, decoder, critic, cuda=False, verbose=False, log_dir=None, lambda_gp=10.0, **kwargs):
+    def __init__(self, data_depth, password_depth, encoder, decoder, cuda=False, verbose=False, log_dir=None, **kwargs):
         self.verbose = verbose
 
         self.data_depth = data_depth
+        self.password_depth = password_depth
         kwargs['data_depth'] = data_depth
-
-        # WGAN-GP specific parameter
-        self.lambda_gp = lambda_gp
+        kwargs['password_depth'] = password_depth
 
         self.encoder = self._get_instance(encoder, kwargs)
         self.decoder = self._get_instance(decoder, kwargs)
-        self.critic = self._get_instance(critic, kwargs)
 
         self.set_device(cuda)
 
-        self.critic_optimizer = None
         self.encoder_decoder_optimizer = None
 
         # Misc
@@ -106,123 +96,88 @@ class SteganoGAN(object):
         return torch.zeros((N, self.data_depth, H, W), device=self.device).random_(0, 2)
 
 
+    def _random_password_data(self, cover):
+        """Generate random data for password payload"""
+        N, _, H, W = cover.size()
+        return torch.zeros((N, self.password_depth, H, W), device=self.device).random_(0, 2)
+
+
     def _encode_decode(self, cover, quantize=False):
+        """
+        Modified to support training with both correct and incorrect passwords
+        """
         payload = self._random_data(cover)
-        generated = self.encoder(cover, payload)
+        password_payload = self._random_password_data(cover)  # Use correct function
+        generated = self.encoder(cover, payload, password_payload)
+        
         if quantize:
             generated = (255.0 * (generated + 1.0) / 2.0).long()
             generated = 2.0 * generated.float() / 255.0 - 1.0
 
-        decoded = self.decoder(generated)
-
-        return generated, payload, decoded
-
-
-    def _critic(self, image):
-        return torch.mean(self.critic(image))
-
-
-    def _gradient_penalty(self, real_samples, fake_samples):
-        """Compute gradient penalty for WGAN-GP"""
-        batch_size = real_samples.size(0)
-
-        # Random weight term for interpolation between real and fake samples
-        alpha = torch.rand(batch_size, 1, 1, 1).to(self.device)
-
-        # Get random interpolation between real and fake samples
-        interpolated = (alpha * real_samples + (1 - alpha) * fake_samples).to(self.device)
-        interpolated.requires_grad_(True)  # CRITICAL: Enable gradients for interpolated samples
+        # For training: sometimes use wrong password to teach decoder to return zeros
+        wrong_password_prob = getattr(self, '_wrong_password_prob', 0.3)
+        batch_size = cover.size(0)
+        correct_password_mask = torch.rand(batch_size) > wrong_password_prob
         
-        # Calculate critic output for interpolated examples
-        critic_interpolated = self.critic(interpolated)
+        # Create test passwords (some correct, some wrong)
+        test_password = password_payload.clone()
+        for i in range(batch_size):
+            if not correct_password_mask[i]:
+                # Generate wrong password for this sample
+                test_password[i] = self._random_password_data(cover[i:i+1])[0]  # Take first item from batch
         
-        # Calculate gradients of critic output with respect to interpolated examples
-        gradients = torch.autograd.grad(
-            outputs=critic_interpolated,
-            inputs=interpolated,
-            grad_outputs=torch.ones_like(critic_interpolated, device=self.device),
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True
-        )[0]
+        # Decode with test password
+        decoded_data = self.decoder(generated, test_password)
         
-        # Flatten gradients to calculate norm
-        gradients = gradients.view(gradients.size(0), -1)
-
-        # Calculate the L2 norm of the gradients
-        gradient_norm = gradients.norm(2, dim=1)
-
-        # Calculate gradient penalty: (||∇||₂ - 1)²
-        gradient_penalty = ((gradient_norm - 1) ** 2).mean()
-
-        return gradient_penalty
-
+        return generated, payload, password_payload, decoded_data, correct_password_mask
 
 
     def _get_optimizers(self):
         _enc_dec_list = list(self.decoder.parameters()) + list(self.encoder.parameters())
-        critic_optimizer = Adam(self.critic.parameters(), lr=1e-4)
         encoder_decoder_optimizer = Adam(_enc_dec_list, lr=1e-4)
 
-        return critic_optimizer, encoder_decoder_optimizer
-
-
-    def _fit_critic(self, train, metrics):
-        for cover, _ in tqdm(train, disable=not self.verbose):
-            gc.collect()
-            cover = cover.to(self.device)
-            
-            # Train critic multiple times per generator step (typical for WGAN-GP)
-            for _ in range(5):  # n_critic = 5
-                payload = self._random_data(cover)
-                generated = self.encoder(cover, payload)
-                # Detach generated samples for critic training
-                generated = generated.detach()
-                
-                # Reset gradients
-                self.critic_optimizer.zero_grad()
-                
-                cover_score = self._critic(cover)
-                generated_score = self._critic(generated)
-                
-                # Compute gradient penalty
-                gradient_penalty = self._gradient_penalty(cover, generated)
-                
-                # WGAN-GP loss: maximize D(real) - D(fake) - λ * GP
-                # Which means minimize: D(fake) - D(real) + λ * GP
-                critic_loss = generated_score - cover_score + self.lambda_gp * gradient_penalty
-                
-                critic_loss.backward()
-                self.critic_optimizer.step()
-            
-            # Store metrics only once per batch (use the last iteration's values)
-            metrics['train.cover_score'].append(cover_score.item())
-            metrics['train.generated_score'].append(generated_score.item())
-            metrics['train.gradient_penalty'].append(gradient_penalty.item())
+        return encoder_decoder_optimizer
 
 
     def _fit_coders(self, train, metrics):
         for cover, _ in tqdm(train, disable=not self.verbose):
             gc.collect()
             cover = cover.to(self.device)
-            generated, payload, decoded = self._encode_decode(cover)
-            encoder_mse, decoder_loss, decoder_acc = self._coding_scores(cover, generated, payload, decoded)
-            generated_score = - self._critic(generated)
+            # Get encoded/decoded data with password verification
+            generated, payload, password_payload, decoded_data, correct_password_mask = self._encode_decode(cover)
+            
+            # Calculate losses
+            encoder_mse, decoder_loss, decoder_acc = self._coding_scores(
+                cover, generated, payload, password_payload, decoded_data, correct_password_mask
+            )
 
             self.encoder_decoder_optimizer.zero_grad()
-            (100.0 * encoder_mse + decoder_loss + generated_score).backward()
+            (100.0 * encoder_mse + decoder_loss).backward()
             self.encoder_decoder_optimizer.step()
 
             metrics['train.encoder_mse'].append(encoder_mse.item())
             metrics['train.decoder_loss'].append(decoder_loss.item())
             metrics['train.decoder_acc'].append(decoder_acc.item())
 
-
-    def _coding_scores(self, cover, generated, payload, decoded):
+    def _coding_scores(self, cover, generated, payload, password_payload, decoded_data, correct_password_mask):
+        """
+        Modified scoring function for password-aware decoder training
+        Keep structure identical to original but handle password verification
+        """
         encoder_mse = mse_loss(generated, cover)
-        decoder_loss = binary_cross_entropy_with_logits(decoded, payload)
-        decoder_acc = (decoded >= 0.0).eq(payload >= 0.5).sum().float() / payload.numel()
-
+        
+        # Create target based on password correctness
+        # If password is correct -> use original payload
+        # If password is wrong -> use zeros (what decoder should output)
+        target = payload.clone()
+        for i in range(len(correct_password_mask)):
+            if not correct_password_mask[i]:
+                target[i] = torch.zeros_like(target[i])
+        
+        # Standard decoder loss and accuracy calculation (identical to original)
+        decoder_loss = binary_cross_entropy_with_logits(decoded_data, target)
+        decoder_acc = (decoded_data >= 0.0).eq(target >= 0.5).sum().float() / target.numel()
+        
         return encoder_mse, decoder_loss, decoder_acc
 
 
@@ -230,26 +185,23 @@ class SteganoGAN(object):
         for cover, _ in tqdm(validate, disable=not self.verbose):
             gc.collect()
             cover = cover.to(self.device)
-            generated, payload, decoded = self._encode_decode(cover, quantize=True)
-            encoder_mse, decoder_loss, decoder_acc = self._coding_scores(cover, generated, payload, decoded)
-            generated_score = self._critic(generated)
-            cover_score = self._critic(cover)
-
-            # Compute gradient penalty for validation metrics
-            gradient_penalty = self._gradient_penalty(cover, generated)
+            # Get encoded/decoded data with password verification
+            generated, payload, password_payload, decoded_data, correct_password_mask = self._encode_decode(cover)
+            
+            # Calculate losses
+            encoder_mse, decoder_loss, decoder_acc = self._coding_scores(
+                cover, generated, payload, password_payload, decoded_data, correct_password_mask
+            )
 
             metrics['val.encoder_mse'].append(encoder_mse.item())
             metrics['val.decoder_loss'].append(decoder_loss.item())
             metrics['val.decoder_acc'].append(decoder_acc.item())
-            metrics['val.cover_score'].append(cover_score.item())
-            metrics['val.generated_score'].append(generated_score.item())
-            metrics['val.gradient_penalty'].append(gradient_penalty.item())
             metrics['val.ssim'].append(ssim(cover, generated).item())
             metrics['val.psnr'].append(10 * torch.log10(4 / encoder_mse).item())
             metrics['val.rsbpp'].append(self.data_depth * (2 * decoder_acc.item() - 1))
 
 
-    def _generate_samples(self, samples_path, epoch, text_to_encode):
+    def _generate_samples(self, samples_path, epoch, text_to_encode, password):
         callback_images_path = os.path.join('data', 'callback_images')
         image_filenames = sorted(os.listdir(callback_images_path))
         if len(image_filenames) < 8:
@@ -266,16 +218,18 @@ class SteganoGAN(object):
             tensor = torch.FloatTensor(image).permute(2, 0, 1)
 
             # Apply encoding if text is provided
-            if text_to_encode:
+            if text_to_encode and password:
                 # Prepare image for encoding (add batch dimension)
                 cover = tensor.unsqueeze(0).to(self.device)
                 cover_size = cover.size()
 
                 payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text_to_encode)
+                password_payload = self._make_payload(cover_size[3], cover_size[2], self.password_depth, password)
                 payload = payload.to(self.device)
+                password_payload = password_payload.to(self.device)
 
                 # Encode the image
-                encoded_tensor = self.encoder(cover, payload)[0].clamp(-1.0, 1.0)
+                encoded_tensor = self.encoder(cover, payload, password_payload)[0].clamp(-1.0, 1.0)
                 # Remove batch dimension and move to CPU
                 tensor = encoded_tensor.squeeze(0).cpu()
 
@@ -327,12 +281,24 @@ class SteganoGAN(object):
         grid_img.save(grid_output_path)
 
 
-    def fit(self, train, validate, epochs=32, start_epoch=1, data_depth=None):
+    def fit(self, train, validate, epochs=32, start_epoch=1, data_depth=None, password_depth=None, wrong_password_prob=0.3):
+        """
+        Simple fit method with password verification training
+        
+        Args:
+            wrong_password_prob: Probability of using wrong password during training (default: 0.3)
+        """
         if self.data_depth is None:
             self.data_depth = data_depth
 
-        if self.critic_optimizer is None:
-            self.critic_optimizer, self.encoder_decoder_optimizer = self._get_optimizers()
+        if self.password_depth is None:
+            self.password_depth = password_depth
+
+        if self.encoder_decoder_optimizer is None:
+            self.encoder_decoder_optimizer = self._get_optimizers()
+
+        # Store wrong_password_prob for use in _encode_decode
+        self._wrong_password_prob = wrong_password_prob
 
         # Load existing history if metrics.log exists
         metrics_path = os.path.join(self.log_dir, 'metrics.log')
@@ -356,7 +322,6 @@ class SteganoGAN(object):
             if self.verbose:
                 print('Epoch {}/{}'.format(epoch, end_epoch - 1))
 
-            self._fit_critic(train, metrics)
             self._fit_coders(train, metrics)
             self._validate(validate, metrics)
 
@@ -374,7 +339,7 @@ class SteganoGAN(object):
                 if epoch == start_epoch or epoch % 5 == 0 or epoch == end_epoch - 1:
                     save_name = '{}.rsbpp-{:03f}.p'.format(epoch, self.fit_metrics['val.rsbpp'])
                     self.save(os.path.join(self.log_dir, save_name))
-                    self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!")
+                    self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!", password="supersecret")
 
             if self.cuda:
                 torch.cuda.empty_cache()
@@ -394,17 +359,22 @@ class SteganoGAN(object):
         return torch.FloatTensor(payload).view(1, depth, height, width)
 
 
-    def encode(self, cover, output, text):
+    def encode(self, cover, output, text, password):
+        """
+        Encode message into image using password
+        """
         cover = imread(cover, pilmode='RGB') / 127.5 - 1.0
         cover = torch.FloatTensor(cover).permute(2, 1, 0).unsqueeze(0)
 
         cover_size = cover.size()
         # _, _, height, width = cover.size()
         payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text)
-
+        password_payload = self._make_payload(cover_size[3], cover_size[2], self.password_depth, password)
+    
         cover = cover.to(self.device)
         payload = payload.to(self.device)
-        generated = self.encoder(cover, payload)[0].clamp(-1.0, 1.0)
+        password_payload = password_payload.to(self.device)
+        generated = self.encoder(cover, payload, password_payload)[0].clamp(-1.0, 1.0)
 
         generated = (generated.permute(2, 1, 0).detach().cpu().numpy() + 1.0) * 127.5
         imwrite(output, generated.astype('uint8'))
@@ -413,7 +383,10 @@ class SteganoGAN(object):
             print('Encoding completed.')
 
 
-    def decode(self, image):
+    def decode(self, image, password):
+        """
+        Decode message from image using password
+        """
         if not os.path.exists(image):
             raise ValueError('Unable to read %s.' % image)
 
@@ -422,22 +395,13 @@ class SteganoGAN(object):
         image = torch.FloatTensor(image).permute(2, 1, 0).unsqueeze(0)
         image = image.to(self.device)
 
-        image = self.decoder(image).view(-1) > 0
+        password_payload = self._make_payload(image.size(3), image.size(2), self.password_depth, password)
+        password_payload = password_payload.to(self.device)
 
-        # split and decode messages
-        candidates = Counter()
-        bits = image.data.int().cpu().numpy().tolist()
-        for candidate in bits_to_bytearray(bits).split(b'\x00\x00\x00\x00'):
-            candidate = bytearray_to_text(bytearray(candidate))
-            if candidate:
-                candidates[candidate] += 1
+        decoded_data = self.decoder(image, password_payload).view(-1) > 0
+        candidate_data = most_common_candidate_from(decoded_data)
 
-        # choose most common message
-        if len(candidates) == 0:
-            raise ValueError('Failed to find message.')
-
-        candidate, count = candidates.most_common(1)[0]
-        return candidate
+        return candidate_data
 
     def save(self, path):
         torch.save(self, path)
@@ -445,6 +409,9 @@ class SteganoGAN(object):
 
     @classmethod
     def load(cls, path, cuda=True, verbose=False, log_dir=None):
+        """
+        Load a pretrained model
+        """
         if (path is None):
             raise ValueError(
                 'Please provide a path to pretrained model.')
@@ -457,7 +424,6 @@ class SteganoGAN(object):
         steganogan = torch.load(path, map_location=device, weights_only=False)
         steganogan.verbose = verbose
 
-        steganogan.critic_optimizer = None
         steganogan.encoder_decoder_optimizer = None
 
         steganogan.fit_metrics = None
@@ -471,7 +437,35 @@ class SteganoGAN(object):
 
         steganogan.encoder.upgrade_legacy()
         steganogan.decoder.upgrade_legacy()
-        steganogan.critic.upgrade_legacy()
 
         steganogan.set_device(cuda)
         return steganogan
+
+    # Additional helper method for testing
+    def test_password_functionality(self, cover_image_path, message="Test message", correct_password="test123"):
+        """
+        Simple test function to verify password functionality works
+        """
+        print("Testing password functionality...")
+
+        # Test encoding
+        encoded_path = "temp_encoded.png"
+        self.encode(cover_image_path, encoded_path, message, correct_password)
+        print(f"✓ Encoded message: '{message}' with password: '{correct_password}'")
+
+        # Test decoding with correct password
+        try:
+            decoded_correct = self.decode(encoded_path, correct_password)
+            print(f"✓ Correct password decoding: '{decoded_correct}'")
+        except Exception as e:
+            print(f"✗ Error with correct password: {e}")
+
+        # Test decoding with wrong password
+        try:
+            decoded_wrong = self.decode(encoded_path, "wrong_password")
+            print(f"✗ Wrong password decoding: '{decoded_wrong}'")
+        except Exception as e:
+            print(f"✗ Error with wrong password: {e}")
+
+        if os.path.exists(encoded_path):
+            os.remove(encoded_path)
