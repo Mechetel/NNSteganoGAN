@@ -176,7 +176,7 @@ class SteganoGAN(object):
         
         # Standard decoder loss and accuracy calculation (identical to original)
         decoder_loss = binary_cross_entropy_with_logits(decoded_data, target)
-        decoder_acc = (decoded_data >= 0.0).eq(target >= 0.5).sum().float() / target.numel()
+        decoder_acc = ((decoded_data > 0.0) == (target > 0.5)).float().mean()
         
         return encoder_mse, decoder_loss, decoder_acc
 
@@ -402,6 +402,7 @@ class SteganoGAN(object):
         candidate_data = most_common_candidate_from(decoded_data)
 
         return candidate_data
+
 
     def save(self, path):
         torch.save(self, path)
