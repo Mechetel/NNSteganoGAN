@@ -152,7 +152,7 @@ class SteganoGAN(object):
             )
 
             self.encoder_decoder_optimizer.zero_grad()
-            (100.0 * encoder_mse + decoder_loss).backward()
+            (encoder_mse + 100.0 * decoder_loss).backward()
             self.encoder_decoder_optimizer.step()
 
             metrics['train.encoder_mse'].append(encoder_mse.item())
