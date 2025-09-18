@@ -176,7 +176,7 @@ class SteganoGAN(object):
         
         # Standard decoder loss and accuracy calculation (identical to original)
         decoder_loss = binary_cross_entropy_with_logits(decoded_data, target)
-        decoder_acc = ((decoded_data > 0.0) == (target > 0.5)).float().mean()
+        decoder_acc = ((decoded_data >= 0.0) == (target >= 0.5)).float().mean()
         
         return encoder_mse, decoder_loss, decoder_acc
 
