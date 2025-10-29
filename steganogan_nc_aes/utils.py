@@ -71,7 +71,7 @@ def bytearray_to_text(x):
     assert isinstance(x, (bytes, bytearray)), "expected bytes or bytearray"
 
     decoded = rs.decode(x)
-    
+
     if isinstance(decoded, tuple):
       decoded = decoded[0]
 
@@ -79,11 +79,6 @@ def bytearray_to_text(x):
     return decompressed.decode("utf-8")
   except BaseException:
     return False
-
-
-def first_element(storage, loc):
-    """Returns the first element of two"""
-    return storage
 
 
 def gaussian(window_size, sigma):
@@ -104,7 +99,6 @@ def create_window(window_size, channel):
 
 
 def _ssim(img1, img2, window, window_size, channel, size_average=True):
-
     padding_size = window_size // 2
 
     mu1 = conv2d(img1, window, padding=padding_size, groups=channel)

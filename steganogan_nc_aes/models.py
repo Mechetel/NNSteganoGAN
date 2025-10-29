@@ -15,6 +15,7 @@ from torch.optim import Adam
 from tqdm import tqdm
 
 from steganogan_nc_aes.utils import bits_to_bytearray, bytearray_to_text, ssim, text_to_bits, most_common_candidate_from
+from steganogan_nc_aes.aes_cypher import AESCipher
 
 DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -107,29 +108,17 @@ class SteganoGAN(object):
         Modified to support training with both correct and incorrect passwords
         """
         payload = self._random_data(cover)
-        password_payload = self._random_password_data(cover)  # Use correct function
+        password_payload = self._random_password_data(cover)
         generated = self.encoder(cover, payload, password_payload)
-        
+
         if quantize:
             generated = (255.0 * (generated + 1.0) / 2.0).long()
             generated = 2.0 * generated.float() / 255.0 - 1.0
 
-        # For training: sometimes use wrong password to teach decoder to return zeros
-        wrong_password_prob = getattr(self, '_wrong_password_prob', 0.3)
-        batch_size = cover.size(0)
-        correct_password_mask = torch.rand(batch_size) > wrong_password_prob
-        
-        # Create test passwords (some correct, some wrong)
-        test_password = password_payload.clone()
-        for i in range(batch_size):
-            if not correct_password_mask[i]:
-                # Generate wrong password for this sample
-                test_password[i] = self._random_password_data(cover[i:i+1])[0]  # Take first item from batch
-        
         # Decode with test password
-        decoded_data = self.decoder(generated, test_password)
-        
-        return generated, payload, password_payload, decoded_data, correct_password_mask
+        decoded_data, decoded_password = self.decoder(generated)
+
+        return generated, payload, password_payload, decoded_data, decoded_password
 
 
     def _get_optimizers(self):
@@ -144,40 +133,32 @@ class SteganoGAN(object):
             gc.collect()
             cover = cover.to(self.device)
             # Get encoded/decoded data with password verification
-            generated, payload, password_payload, decoded_data, correct_password_mask = self._encode_decode(cover)
-            
+            generated, payload, password_payload, decoded_data, decoded_password = self._encode_decode(cover)
+
             # Calculate losses
             encoder_mse, decoder_loss, decoder_acc = self._coding_scores(
-                cover, generated, payload, password_payload, decoded_data, correct_password_mask
+                cover, generated, payload, password_payload, decoded_data, decoded_password
             )
 
             self.encoder_decoder_optimizer.zero_grad()
-            (encoder_mse + 100.0 * decoder_loss).backward()
+            (100.0 * encoder_mse + decoder_loss).backward()
             self.encoder_decoder_optimizer.step()
 
             metrics['train.encoder_mse'].append(encoder_mse.item())
             metrics['train.decoder_loss'].append(decoder_loss.item())
             metrics['train.decoder_acc'].append(decoder_acc.item())
 
-    def _coding_scores(self, cover, generated, payload, password_payload, decoded_data, correct_password_mask):
-        """
-        Modified scoring function for password-aware decoder training
-        Keep structure identical to original but handle password verification
-        """
+
+    def _coding_scores(self, cover, generated, payload, password_payload, decoded_data, decoded_password):
+        # Combine message + password for unified loss
+        full_target = torch.cat([payload, password_payload], dim=1)
+        full_decoded = torch.cat([decoded_data, decoded_password], dim=1)
+
         encoder_mse = mse_loss(generated, cover)
-        
-        # Create target based on password correctness
-        # If password is correct -> use original payload
-        # If password is wrong -> use zeros (what decoder should output)
-        target = payload.clone()
-        for i in range(len(correct_password_mask)):
-            if not correct_password_mask[i]:
-                target[i] = torch.zeros_like(target[i])
-        
-        # Standard decoder loss and accuracy calculation (identical to original)
-        decoder_loss = binary_cross_entropy_with_logits(decoded_data, target)
-        decoder_acc = ((decoded_data >= 0.0) == (target >= 0.5)).float().mean()
-        
+        decoder_loss = binary_cross_entropy_with_logits(full_decoded, full_target)
+
+        decoder_acc = (full_decoded >= 0.0).eq(full_target >= 0.5).sum().float() / full_target.numel()
+
         return encoder_mse, decoder_loss, decoder_acc
 
 
@@ -186,11 +167,11 @@ class SteganoGAN(object):
             gc.collect()
             cover = cover.to(self.device)
             # Get encoded/decoded data with password verification
-            generated, payload, password_payload, decoded_data, correct_password_mask = self._encode_decode(cover)
-            
+            generated, payload, password_payload, decoded_data, decoded_password = self._encode_decode(cover)
+
             # Calculate losses
             encoder_mse, decoder_loss, decoder_acc = self._coding_scores(
-                cover, generated, payload, password_payload, decoded_data, correct_password_mask
+                cover, generated, payload, password_payload, decoded_data, decoded_password
             )
 
             metrics['val.encoder_mse'].append(encoder_mse.item())
@@ -218,15 +199,13 @@ class SteganoGAN(object):
             tensor = torch.FloatTensor(image).permute(2, 0, 1)
 
             # Apply encoding if text is provided
-            if text_to_encode and password:
+            if text_to_encode:
                 # Prepare image for encoding (add batch dimension)
                 cover = tensor.unsqueeze(0).to(self.device)
                 cover_size = cover.size()
 
-                payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text_to_encode)
-                password_payload = self._make_payload(cover_size[3], cover_size[2], self.password_depth, password)
-                payload = payload.to(self.device)
-                password_payload = password_payload.to(self.device)
+                payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text_to_encode).to(self.device)
+                password_payload = self._make_payload(cover_size[3], cover_size[2], self.password_depth, password).to(self.device)
 
                 # Encode the image
                 encoded_tensor = self.encoder(cover, payload, password_payload)[0].clamp(-1.0, 1.0)
@@ -281,13 +260,8 @@ class SteganoGAN(object):
         grid_img.save(grid_output_path)
 
 
-    def fit(self, train, validate, epochs=32, start_epoch=1, data_depth=None, password_depth=None, wrong_password_prob=0.3):
-        """
-        Simple fit method with password verification training
-        
-        Args:
-            wrong_password_prob: Probability of using wrong password during training (default: 0.3)
-        """
+
+    def fit(self, train, validate, epochs=32, start_epoch=1, data_depth=None, password_depth=None):
         if self.data_depth is None:
             self.data_depth = data_depth
 
@@ -296,9 +270,6 @@ class SteganoGAN(object):
 
         if self.encoder_decoder_optimizer is None:
             self.encoder_decoder_optimizer = self._get_optimizers()
-
-        # Store wrong_password_prob for use in _encode_decode
-        self._wrong_password_prob = wrong_password_prob
 
         # Load existing history if metrics.log exists
         metrics_path = os.path.join(self.log_dir, 'metrics.log')
@@ -339,7 +310,7 @@ class SteganoGAN(object):
                 if epoch == start_epoch or epoch % 5 == 0 or epoch == end_epoch - 1:
                     save_name = '{}.rsbpp-{:03f}.p'.format(epoch, self.fit_metrics['val.rsbpp'])
                     self.save(os.path.join(self.log_dir, save_name))
-                    self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!", password="supersecret")
+                    self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!")
 
             if self.cuda:
                 torch.cuda.empty_cache()
@@ -347,8 +318,29 @@ class SteganoGAN(object):
             gc.collect()
 
 
-    def _make_payload(self, width, height, depth, text):
-        message = text_to_bits(text) + [0] * 32
+    def _make_payload(self, width, height, depth, text, password_for_encryption: str = None, encrypt: bool = False):
+        """
+        Build payload bits for embedding.
+
+        If encrypt=True and password_for_encryption is provided, the `text` will first be
+        encrypted with AES (base64 output) using that password, and the base64 string will
+        be encoded to bits via text_to_bits (keeps your RS + zlib pipeline).
+        """
+        if text is None:
+            text = ''
+
+        if encrypt and password_for_encryption:
+            # encrypt text using AES, result is base64 string
+            aes = AESCipher(password_for_encryption)
+            try:
+                text_to_store = aes.encrypt(text)
+            except Exception as e:
+                raise ValueError(f"Failed to encrypt payload: {e}")
+        else:
+            text_to_store = text
+
+        # use existing pipeline to convert text to bits (zlib + RS + bits)
+        message = text_to_bits(text_to_store) + [0] * 32
 
         payload = message
         while len(payload) < width * height * depth:
@@ -359,21 +351,17 @@ class SteganoGAN(object):
         return torch.FloatTensor(payload).view(1, depth, height, width)
 
 
+
     def encode(self, cover, output, text, password):
-        """
-        Encode message into image using password
-        """
         cover = imread(cover, pilmode='RGB') / 127.5 - 1.0
-        cover = torch.FloatTensor(cover).permute(2, 1, 0).unsqueeze(0)
+        cover = torch.FloatTensor(cover).permute(2, 1, 0).unsqueeze(0).to(self.device)
 
         cover_size = cover.size()
-        # _, _, height, width = cover.size()
-        payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text)
-        password_payload = self._make_payload(cover_size[3], cover_size[2], self.password_depth, password)
-    
-        cover = cover.to(self.device)
-        payload = payload.to(self.device)
-        password_payload = password_payload.to(self.device)
+        # payload (message) is encrypted with AES using provided password
+        payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text, password_for_encryption=password, encrypt=True).to(self.device)
+        # password payload still stores the password bits as before (not encrypted)
+        password_payload = self._make_payload(cover_size[3], cover_size[2], self.password_depth, password).to(self.device)
+
         generated = self.encoder(cover, payload, password_payload)[0].clamp(-1.0, 1.0)
 
         generated = (generated.permute(2, 1, 0).detach().cpu().numpy() + 1.0) * 127.5
@@ -383,25 +371,36 @@ class SteganoGAN(object):
             print('Encoding completed.')
 
 
+
     def decode(self, image, password):
-        """
-        Decode message from image using password
-        """
         if not os.path.exists(image):
             raise ValueError('Unable to read %s.' % image)
 
         # extract a bit vector
         image = imread(image, pilmode='RGB') / 255.0
-        image = torch.FloatTensor(image).permute(2, 1, 0).unsqueeze(0)
-        image = image.to(self.device)
+        image = torch.FloatTensor(image).permute(2, 1, 0).unsqueeze(0).to(self.device)
 
-        password_payload = self._make_payload(image.size(3), image.size(2), self.password_depth, password)
-        password_payload = password_payload.to(self.device)
+        decoded_data, decoded_password = self.decoder(image)
+        # previous code: flatten and threshold then select most common candidate
+        decoded_data = decoded_data.view(-1) > 0
+        decoded_password = decoded_password.view(-1) > 0
 
-        decoded_data = self.decoder(image, password_payload).view(-1) > 0
-        candidate_data = most_common_candidate_from(decoded_data)
+        decoded_data_candidate = most_common_candidate_from(decoded_data)
+        decoded_password_candidate = most_common_candidate_from(decoded_password)
 
-        return candidate_data
+        if not decoded_password_candidate == password:
+            raise ValueError('Incorrect password!')
+
+        # Attempt AES decryption of the decoded data using the provided password
+        aes = AESCipher(password)
+        try:
+            decrypted = aes.decrypt(decoded_data_candidate)
+        except Exception:
+            # decryption failed -> treat as incorrect password / corrupted payload
+            raise ValueError('Incorrect password or failed to decrypt message!')
+
+        return decrypted, decoded_password_candidate
+
 
 
     def save(self, path):
@@ -441,32 +440,3 @@ class SteganoGAN(object):
 
         steganogan.set_device(cuda)
         return steganogan
-
-    # Additional helper method for testing
-    def test_password_functionality(self, cover_image_path, message="Test message", correct_password="test123"):
-        """
-        Simple test function to verify password functionality works
-        """
-        print("Testing password functionality...")
-
-        # Test encoding
-        encoded_path = "temp_encoded.png"
-        self.encode(cover_image_path, encoded_path, message, correct_password)
-        print(f"✓ Encoded message: '{message}' with password: '{correct_password}'")
-
-        # Test decoding with correct password
-        try:
-            decoded_correct = self.decode(encoded_path, correct_password)
-            print(f"✓ Correct password decoding: '{decoded_correct}'")
-        except Exception as e:
-            print(f"✗ Error with correct password: {e}")
-
-        # Test decoding with wrong password
-        try:
-            decoded_wrong = self.decode(encoded_path, "wrong_password")
-            print(f"✗ Wrong password decoding: '{decoded_wrong}'")
-        except Exception as e:
-            print(f"✗ Error with wrong password: {e}")
-
-        if os.path.exists(encoded_path):
-            os.remove(encoded_path)
