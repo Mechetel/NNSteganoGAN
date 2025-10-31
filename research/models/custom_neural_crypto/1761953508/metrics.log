@@ -1,0 +1,26 @@
+[
+    {
+        "val.encoder_mse": 0.018937039226293563,
+        "val.decoder_loss": 0.6581134796142578,
+        "val.decoder_acc": 0.6246000027656555,
+        "val.ssim": 0.7801939964294433,
+        "val.psnr": 23.64833002090454,
+        "val.rsbpp": 0.24920000553131103,
+        "train.encoder_mse": 0.05572416344191879,
+        "train.decoder_loss": 0.6788076084852218,
+        "train.decoder_acc": 0.5768999981880188,
+        "epoch": 1
+    },
+    {
+        "val.encoder_mse": 0.01088533184491098,
+        "val.decoder_loss": 0.6143135714530945,
+        "val.decoder_acc": 0.6779999971389771,
+        "val.ssim": 0.8257455992698669,
+        "val.psnr": 26.45748128890991,
+        "val.rsbpp": 0.3559999942779541,
+        "train.encoder_mse": 0.016652679855469615,
+        "train.decoder_loss": 0.6438076749444008,
+        "train.decoder_acc": 0.6411625012755394,
+        "epoch": 2
+    }
+]
