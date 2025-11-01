@@ -1,0 +1,7 @@
+{
+  "epochs": 32,
+  "encoder": "dense",
+  "data_depth": 1,
+  "password_depth": 1,
+  "dataset": "div2k"
+}

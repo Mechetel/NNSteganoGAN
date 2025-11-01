@@ -310,7 +310,7 @@ class SteganoGAN(object):
                 if epoch == start_epoch or epoch % 5 == 0 or epoch == end_epoch - 1:
                     save_name = '{}.rsbpp-{:03f}.p'.format(epoch, self.fit_metrics['val.rsbpp'])
                     self.save(os.path.join(self.log_dir, save_name))
-                    self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!")
+                    self._generate_samples(self.samples_path, epoch, text_to_encode="Hello, SteganoGAN!", password="password123")
 
             if self.cuda:
                 torch.cuda.empty_cache()

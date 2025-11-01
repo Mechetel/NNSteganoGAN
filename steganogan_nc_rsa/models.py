@@ -66,8 +66,7 @@ class SteganoGAN(object):
         self.decoder.to(self.device)
 
 
-    def __init__(self, data_depth, encoder, decoder, cuda=False, verbose=False, log_dir=None, 
-                 rsa_public_key_path=None, rsa_private_key_path=None, **kwargs):
+    def __init__(self, data_depth, encoder, decoder, cuda=False, verbose=False, log_dir=None, **kwargs):
         self.verbose = verbose
 
         self.data_depth = data_depth
@@ -79,26 +78,6 @@ class SteganoGAN(object):
         self.set_device(cuda)
 
         self.encoder_decoder_optimizer = None
-
-        # RSA cipher setup
-        self.rsa_cipher = RSACipher(key_size=2048)
-        
-        # Load keys if provided
-        if rsa_public_key_path and os.path.exists(rsa_public_key_path):
-            self.rsa_cipher.load_public_key_from_file(rsa_public_key_path)
-            if self.verbose:
-                print(f'Loaded RSA public key from {rsa_public_key_path}')
-        
-        if rsa_private_key_path and os.path.exists(rsa_private_key_path):
-            self.rsa_cipher.load_keys_from_files(rsa_private_key_path)
-            if self.verbose:
-                print(f'Loaded RSA private key from {rsa_private_key_path}')
-        
-        # If no keys loaded, generate new ones
-        if not self.rsa_cipher.public_key:
-            self.rsa_cipher.generate_keys()
-            if self.verbose:
-                print('Generated new RSA key pair')
 
         # Misc
         self.fit_metrics = None
@@ -181,7 +160,6 @@ class SteganoGAN(object):
             raise ValueError("Expected at least 8 generated images in callback_images")
 
         reshaped_tensors = []
-        original_images = []
 
         for filename in image_filenames[:8]:
             path = os.path.join(callback_images_path, filename)
@@ -190,25 +168,16 @@ class SteganoGAN(object):
             image = imread(path, pilmode='RGB') / 127.5 - 1.0
             tensor = torch.FloatTensor(image).permute(2, 0, 1)
 
-            # Apply encoding if text is provided
+            # Apply encoding if text is provided (WITHOUT RSA during training)
             if text_to_encode:
-                # Prepare image for encoding (add batch dimension)
                 cover = tensor.unsqueeze(0).to(self.device)
                 cover_size = cover.size()
 
                 payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text_to_encode)
                 payload = payload.to(self.device)
 
-                # Encode the image
                 encoded_tensor = self.encoder(cover, payload)[0].clamp(-1.0, 1.0)
-                # Remove batch dimension and move to CPU
                 tensor = encoded_tensor.squeeze(0).cpu()
-
-            # Save original image (without resize)
-            original_tensor = tensor.clamp(-1.0, 1.0)
-            original_tensor = ((original_tensor + 1.0) / 2.0 * 255.0).byte()
-            original_image = Image.fromarray(original_tensor.permute(1, 2, 0).numpy())
-            original_images.append((filename, original_image))
 
             # Scale for grid
             resized_tensor = torch.nn.functional.interpolate(
@@ -255,7 +224,6 @@ class SteganoGAN(object):
             try:
                 with open(metrics_path, 'r') as metrics_file:
                     self.history = json.load(metrics_file)
-                    print(self.history)
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Warning: Could not load existing metrics.log: {e}")
                 self.history = []
@@ -296,27 +264,15 @@ class SteganoGAN(object):
             gc.collect()
 
 
-    def _make_payload(self, width, height, depth, text, encrypt: bool = True):
+    def _make_payload(self, width, height, depth, text):
         """
-        Build payload bits for embedding.
-        
-        If encrypt=True, the text will be encrypted with RSA using the public key.
-        The encrypted base64 string will be encoded to bits.
+        Build payload bits for embedding WITHOUT encryption (used during training).
         """
         if text is None:
             text = ''
 
-        if encrypt and self.rsa_cipher.public_key:
-            # Encrypt text using RSA, result is base64 string
-            try:
-                text_to_store = self.rsa_cipher.encrypt(text)
-            except Exception as e:
-                raise ValueError(f"Failed to encrypt payload: {e}")
-        else:
-            text_to_store = text
-
         # Use existing pipeline to convert text to bits
-        message = text_to_bits(text_to_store) + [0] * 32
+        message = text_to_bits(text) + [0] * 32
 
         payload = message
         while len(payload) < width * height * depth:
@@ -327,59 +283,104 @@ class SteganoGAN(object):
         return torch.FloatTensor(payload).view(1, depth, height, width)
 
 
-    def encode(self, cover, output, text):
+    def encode(self, cover, output, text, public_key_path=None):
         """
-        Encode text into cover image using RSA encryption (no password needed).
-        The text is encrypted with the public key automatically.
+        Encode text into cover image using RSA encryption.
+        
+        Args:
+            cover: Path to cover image
+            output: Path to save stego image
+            text: Message to hide
+            public_key_path: Path to RSA public key PEM file
         """
-        cover = imread(cover, pilmode='RGB') / 127.5 - 1.0
-        cover = torch.FloatTensor(cover).permute(2, 1, 0).unsqueeze(0)
+        # Load RSA cipher and public key
+        rsa_cipher = RSACipher(key_size=2048)
+        
+        if public_key_path and os.path.exists(public_key_path):
+            rsa_cipher.load_public_key_from_file(public_key_path)
+            if self.verbose:
+                print(f'Loaded RSA public key from {public_key_path}')
+        else:
+            raise ValueError("Public key path is required for encoding!")
 
-        cover_size = cover.size()
-        # Payload is encrypted with RSA using public key
-        payload = self._make_payload(cover_size[3], cover_size[2], self.data_depth, text, encrypt=True)
+        # Encrypt message with RSA
+        try:
+            encrypted_text = rsa_cipher.encrypt(text)
+        except Exception as e:
+            raise ValueError(f"Failed to encrypt payload: {e}")
 
-        cover = cover.to(self.device)
-        payload = payload.to(self.device)
-        generated = self.encoder(cover, payload)[0].clamp(-1.0, 1.0)
+        # Load cover image
+        cover_img = imread(cover, pilmode='RGB') / 127.5 - 1.0
+        cover_tensor = torch.FloatTensor(cover_img).permute(2, 1, 0).unsqueeze(0)
 
+        cover_size = cover_tensor.size()
+        
+        # Create payload from encrypted text
+        message = text_to_bits(encrypted_text) + [0] * 32
+        payload = message
+        while len(payload) < cover_size[3] * cover_size[2] * self.data_depth:
+            payload += message
+        payload = payload[:cover_size[3] * cover_size[2] * self.data_depth]
+        payload_tensor = torch.FloatTensor(payload).view(1, self.data_depth, cover_size[2], cover_size[3])
+
+        # Encode
+        cover_tensor = cover_tensor.to(self.device)
+        payload_tensor = payload_tensor.to(self.device)
+        generated = self.encoder(cover_tensor, payload_tensor)[0].clamp(-1.0, 1.0)
+
+        # Save
         generated = (generated.permute(2, 1, 0).detach().cpu().numpy() + 1.0) * 127.5
         imwrite(output, generated.astype('uint8'))
 
         if self.verbose:
-            print('Encoding completed.')
+            print('Encoding completed with RSA encryption.')
 
 
-    def decode(self, image):
+    def decode(self, image, private_key_path=None, password=None):
         """
-        Decode text from image using RSA decryption (no password needed).
-        The private key is used automatically for decryption.
+        Decode text from image using RSA decryption.
+        
+        Args:
+            image: Path to stego image
+            private_key_path: Path to RSA private key PEM file
+            password: Password for RSA private key (if encrypted)
+        Returns:
+            Decrypted message
         """
         if not os.path.exists(image):
-            raise ValueError('Unable to read %s.' % image)
+            raise ValueError(f'Unable to read {image}.')
 
-        # Extract a bit vector
-        image = imread(image, pilmode='RGB') / 255.0
-        image = torch.FloatTensor(image).permute(2, 1, 0).unsqueeze(0)
-        image = image.to(self.device)
+        # Load RSA cipher and private key
+        rsa_cipher = RSACipher(key_size=2048)
+        
+        if private_key_path and os.path.exists(private_key_path):
+            rsa_cipher.load_keys_from_files(private_key_path, password=password)
+            if self.verbose:
+                print(f'Loaded RSA private key from {private_key_path}')
+        else:
+            raise ValueError("Private key path is required for decoding!")
 
-        decoded = self.decoder(image).view(-1) > 0
+        # Extract bits from image
+        img = imread(image, pilmode='RGB') / 255.0
+        img_tensor = torch.FloatTensor(img).permute(2, 1, 0).unsqueeze(0)
+        img_tensor = img_tensor.to(self.device)
 
-        # Split and decode messages
-        bits = decoded.data.int().cpu().numpy().tolist()
+        decoded = self.decoder(img_tensor).view(-1) > 0
+
+        # Find most common candidate
         decoded_data_candidate = most_common_candidate_from(decoded)
 
         if not decoded_data_candidate:
             raise ValueError('Failed to find message.')
 
-        # Attempt RSA decryption of the decoded data
-        if not self.rsa_cipher.private_key:
-            raise ValueError('Private key is required for decryption!')
-
+        # Decrypt with RSA
         try:
-            decrypted = self.rsa_cipher.decrypt(decoded_data_candidate)
+            decrypted = rsa_cipher.decrypt(decoded_data_candidate)
         except Exception as e:
             raise ValueError(f'Failed to decrypt message: {e}')
+
+        if self.verbose:
+            print('Decoding completed with RSA decryption.')
 
         return decrypted
 
@@ -389,8 +390,7 @@ class SteganoGAN(object):
 
 
     @classmethod
-    def load(cls, path, cuda=True, verbose=False, log_dir=None, 
-             rsa_public_key_path=None, rsa_private_key_path=None):
+    def load(cls, path, cuda=True, verbose=False, log_dir=None):
         if path is None:
             raise ValueError('Please provide a path to pretrained model.')
 
@@ -403,7 +403,6 @@ class SteganoGAN(object):
         steganogan.verbose = verbose
 
         steganogan.encoder_decoder_optimizer = None
-
         steganogan.fit_metrics = None
         steganogan.history = list()
 
@@ -412,17 +411,6 @@ class SteganoGAN(object):
             os.makedirs(steganogan.log_dir, exist_ok=True)
             steganogan.samples_path = os.path.join(steganogan.log_dir, 'samples')
             os.makedirs(steganogan.samples_path, exist_ok=True)
-
-        # Load RSA keys if provided
-        if rsa_public_key_path and os.path.exists(rsa_public_key_path):
-            steganogan.rsa_cipher.load_public_key_from_file(rsa_public_key_path)
-            if verbose:
-                print(f'Loaded RSA public key from {rsa_public_key_path}')
-        
-        if rsa_private_key_path and os.path.exists(rsa_private_key_path):
-            steganogan.rsa_cipher.load_keys_from_files(rsa_private_key_path)
-            if verbose:
-                print(f'Loaded RSA private key from {rsa_private_key_path}')
 
         steganogan.encoder.upgrade_legacy()
         steganogan.decoder.upgrade_legacy()
