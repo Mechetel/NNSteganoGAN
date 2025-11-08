@@ -1,0 +1,99 @@
+{
+  "timestamp": "2025-11-05T22:57:57.401095",
+  "model_path": "/Users/dmitryhoma/Projects/phd_dissertation/state_3/NNSteganoGAN/research/models/no_critic_with_aes/1761964732/weights.steg",
+  "dataset_path": "/Users/dmitryhoma/Projects/phd_dissertation/state_3/NNSteganoGAN/research/data/div2k/val/_",
+  "image_quality": {
+    "ssim": {
+      "mean": 0.9547729531179519,
+      "std": 0.019325037314392158,
+      "min": 0.9195419800946706,
+      "max": 0.9839029298183831
+    },
+    "psnr": {
+      "mean": 35.71295908487881,
+      "std": 1.5841646588193534,
+      "min": 32.640713557654465,
+      "max": 38.262273603651344
+    },
+    "mse": {
+      "mean": 18.707082662714157,
+      "std": 7.411337977865092
+    }
+  },
+  "encoding_accuracy": {
+    "total_tests": 30,
+    "successful": 5,
+    "failed": 25,
+    "accuracy_percent": 16.666666666666664,
+    "errors": [
+      {
+        "image": "resized_0878.png",
+        "error": "Failed to find message."
+      },
+      {
+        "image": "resized_0878.png",
+        "error": "Failed to find message."
+      },
+      {
+        "image": "resized_0850.png",
+        "error": "Failed to find message."
+      },
+      {
+        "image": "resized_0850.png",
+        "error": "Failed to find message."
+      },
+      {
+        "image": "resized_0844.png",
+        "error": "Failed to find message."
+      }
+    ]
+  },
+  "crypto_strength": {
+    "entropy": {
+      "mean": 7.992040898615815,
+      "std": 0.00139346314353797,
+      "ideal": 8.0,
+      "score": 99.90051123269768
+    },
+    "key_space_bits": 256,
+    "algorithm": "AES-CBC with PBKDF2"
+  },
+  "attack_resistance": {
+    "wrong_password_blocked": 25,
+    "password_variations_accepted": 0,
+    "total_tests": 25,
+    "blocked_percent": 100.0,
+    "security_score": 100.0
+  },
+  "performance": {
+    "encode_time": {
+      "mean": 0.21570177078247071,
+      "std": 0.013267193773036305,
+      "min": 0.20031094551086426,
+      "max": 0.24470090866088867
+    },
+    "decode_time": {
+      "mean": 3.459306478500366,
+      "std": 0.06347846984863281,
+      "min": 3.3958280086517334,
+      "max": 3.522784948348999
+    }
+  },
+  "statistical_detection": {
+    "chi_square_tests": 10,
+    "detectable": 10,
+    "undetectable": 0,
+    "detection_rate_percent": 100.0,
+    "stealth_score": 0.0,
+    "mean_chi2": 4992694.73310778
+  },
+  "overall_score": 62.40889464223191,
+  "grade": "C+",
+  "individual_scores": {
+    "Image Quality (SSIM)": 95.47729531179519,
+    "Encoding Accuracy": 16.666666666666664,
+    "Entropy Score": 99.90051123269768,
+    "Attack Resistance": 100.0,
+    "Stealth Score": 0.0
+  }
+}
